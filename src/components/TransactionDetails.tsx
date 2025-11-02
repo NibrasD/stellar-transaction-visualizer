@@ -1,7 +1,247 @@
 import React from 'react';
 import { ExternalLink, AlertTriangle, CheckCircle, XCircle, Info, Code, Eye, ChevronDown, ChevronRight } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
+import * as StellarSdk from '@stellar/stellar-sdk';
 import type { TransactionDetails } from '../types/stellar';
+
+// Helper function to safely stringify values that may contain BigInt
+function safeStringify(value: any, indent?: number): string {
+  if (value === null || value === undefined) return String(value);
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value !== 'object') return String(value);
+
+  try {
+    return JSON.stringify(value, (_, v) => typeof v === 'bigint' ? v.toString() : v, indent);
+  } catch (e) {
+    return String(value);
+  }
+}
+
+// Helper to detect serialized buffers
+const isSerializedBuffer = (obj: any): boolean => {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+  const keys = Object.keys(obj);
+  if (keys.length === 0) return false;
+  const numericKeys = keys.filter(k => /^\d+$/.test(k)).map(Number).sort((a, b) => a - b);
+  if (numericKeys.length !== keys.length) return false;
+  for (let i = 0; i < numericKeys.length; i++) {
+    if (numericKeys[i] !== i) return false;
+  }
+  return keys.every(k => {
+    const val = obj[k];
+    return typeof val === 'number' && val >= 0 && val <= 255;
+  });
+};
+
+const serializedBufferToUint8Array = (obj: any): Uint8Array => {
+  const keys = Object.keys(obj).map(Number).sort((a, b) => a - b);
+  const bytes = new Uint8Array(keys.length);
+  keys.forEach((k, i) => {
+    bytes[i] = obj[k];
+  });
+  return bytes;
+};
+
+// Format value with type annotations (sym, bytes, u32, i128, etc.)
+const formatValueWithType = (val: any, maxLength: number = 60): string => {
+  if (val === null || val === undefined) return 'null';
+
+  // Check for serialized buffers
+  if (val && typeof val === 'object' && isSerializedBuffer(val)) {
+    const bytes = serializedBufferToUint8Array(val);
+    if (bytes.length === 32) {
+      try {
+        const addr = StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+        return `${addr.substring(0, 4)}…${addr.substring(addr.length - 4)}`;
+      } catch {
+        try {
+          const addr = StellarSdk.StrKey.encodeContract(bytes);
+          return `${addr.substring(0, 4)}…${addr.substring(addr.length - 4)}`;
+        } catch {
+          const hex = Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join('');
+          return `0x${hex.slice(0, 8)}…${hex.slice(-8)}`;
+        }
+      }
+    }
+    const b64 = btoa(String.fromCharCode(...Array.from(bytes)));
+    const displayB64 = b64.length > 24 ? `${b64.substring(0, 12)}…${b64.substring(b64.length - 6)}` : b64;
+    return `${displayB64}bytes`;
+  }
+
+  if (typeof val === 'string') {
+    if (val.length > 40 && (val.startsWith('G') || val.startsWith('C'))) {
+      return `${val.substring(0, 4)}…${val.substring(val.length - 4)}`;
+    }
+    return `"${val}"sym`;
+  }
+
+  if (typeof val === 'number') {
+    return `${val}u32`;
+  }
+
+  if (typeof val === 'bigint') {
+    return `${val}i128`;
+  }
+
+  if (typeof val === 'boolean') {
+    return `${val}bool`;
+  }
+
+  if (Array.isArray(val)) {
+    const items = val.map(v => formatValueWithType(v, 30)).join(', ');
+    if (items.length > maxLength) {
+      return `[${items.substring(0, maxLength - 3)}…]`;
+    }
+    return `[${items}]`;
+  }
+
+  if (typeof val === 'object') {
+    try {
+      const entries = Object.entries(val).slice(0, 5).map(([k, v]) => {
+        const key = typeof k === 'string' ? `"${k}"sym` : k;
+        const value = formatValueWithType(v, 25);
+        return `${key}: ${value}`;
+      });
+      const entriesStr = entries.join(', ');
+      const hasMore = Object.keys(val).length > 5;
+      return `{${entriesStr}${hasMore ? ', …' : ''}}`;
+    } catch {
+      return '{…}';
+    }
+  }
+
+  return String(val);
+};
+
+// Decode raw Stellar/Soroban values to human-readable format
+function decodeValue(val: any): string {
+  if (val === null || val === undefined) return 'null';
+
+  // If it's already a properly formatted string (address, etc), return it
+  if (typeof val === 'string') {
+    // Already decoded addresses or symbols
+    if (val.startsWith('G') || val.startsWith('C') || val.length < 200) {
+      return val;
+    }
+    return val.length > 64 ? `${val.slice(0,61)}...` : val;
+  }
+
+  // Primitive numbers and booleans
+  if (typeof val === 'number' || typeof val === 'boolean') {
+    return String(val);
+  }
+
+  // Handle typed objects with specific formatting
+  if (typeof val === 'object' && val !== null) {
+    // Check if it's a buffer-like array (indexed object with numeric keys)
+    const keys = Object.keys(val);
+    const isArrayLike = keys.length > 0 && keys.every(k => !isNaN(Number(k)));
+
+    if (isArrayLike) {
+      // Convert to actual array
+      const arr = keys.map(k => val[k]);
+
+      // Try to decode as Stellar address (32 bytes)
+      if (arr.length === 32 && arr.every((n: any) => typeof n === 'number' && n >= 0 && n <= 255)) {
+        try {
+          const bytes = new Uint8Array(arr);
+          // Try contract address first (C...)
+          try {
+            return StellarSdk.StrKey.encodeContract(bytes);
+          } catch {
+            try {
+              return StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+            } catch {
+              // Show as hex if not an address
+              const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+              return hex.length > 16 ? `0x${hex.slice(0,8)}...${hex.slice(-8)}` : `0x${hex}`;
+            }
+          }
+        } catch {}
+      }
+
+      // Small numeric arrays - might be amounts or IDs
+      if (arr.length <= 4 && arr.every((n: any) => typeof n === 'number')) {
+        return `[${arr.join(', ')}]`;
+      }
+
+      // Large byte arrays - show as hex
+      if (arr.length > 4) {
+        const hex = arr.map((n: any) => typeof n === 'number' ? n.toString(16).padStart(2, '0') : '??').join('');
+        return hex.length > 32 ? `0x${hex.slice(0,16)}...${hex.slice(-16)}` : `0x${hex}`;
+      }
+    }
+
+    // Handle objects with meaningful properties
+    if ('_switch' in val && '_value' in val) {
+      return decodeValue(val._value);
+    }
+
+    // Small objects - show key-value pairs
+    if (keys.length <= 3 && keys.length > 0) {
+      const pairs = keys.map(k => `${k}: ${decodeValue(val[k])}`).join(', ');
+      return `{${pairs}}`;
+    }
+
+    return '{...}';
+  }
+
+  return String(val);
+}
+
+// Format ledger effect for readable display
+function formatLedgerEffect(effect: any): string {
+  if (!effect) return '';
+
+  const desc = effect.description || '';
+
+  // Extract just the type and key - strip all the JSON noise
+  if (desc.includes('updated persistent data')) {
+    const keyMatch = desc.match(/\["([^"]+)"\]/);
+    if (keyMatch) {
+      const key = keyMatch[1];
+      if (key === 'undefined') return 'Updated contract state';
+      return `Updated: ${key}`;
+    }
+    return 'Updated persistent data';
+  }
+
+  if (desc.includes('created temporary data')) {
+    const keyMatch = desc.match(/\["([^"]+)"\]/);
+    if (keyMatch) {
+      return `Created temp: ${keyMatch[1]}`;
+    }
+    return 'Created temporary data';
+  }
+
+  if (desc.includes('updated temporary data')) {
+    const keyMatch = desc.match(/\["([^"]+)"\]/);
+    if (keyMatch) {
+      const key = keyMatch[1];
+      if (key.length > 35) {
+        return `Updated temp: ${key.substring(0, 32)}...`;
+      }
+      return `Updated temp: ${key}`;
+    }
+    return 'Updated temporary data';
+  }
+
+  // Fallback for clean descriptions
+  if (desc && !desc.includes('{') && !desc.includes('=') && desc.length < 50) {
+    return desc;
+  }
+
+  return effect.type || 'State change';
+}
+
+// Helper function to safely extract account address from source_account field
+// The Horizon API sometimes returns source_account as an array [0, "address"] instead of a string
+function extractAccountAddress(sourceAccount: any): string {
+  if (Array.isArray(sourceAccount)) {
+    return String(sourceAccount[sourceAccount.length - 1]);
+  }
+  return String(sourceAccount || '');
+}
 
 interface TransactionDetailsProps {
   transaction: TransactionDetails;
@@ -15,6 +255,13 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
     envelope: false,
     meta: false,
   });
+
+  // Debug logging
+  React.useEffect(() => {
+    console.log('🔍 TransactionDetails - Full transaction object:', transaction);
+    console.log('🔍 TransactionDetails - debugInfo:', transaction.debugInfo);
+    console.log('🔍 TransactionDetails - errorAnalysis:', transaction.debugInfo?.errorAnalysis);
+  }, [transaction]);
 
   const getStatusIcon = () => {
     if (transaction.status === 'success') {
@@ -152,8 +399,23 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
     return solutions[errorCode] || 'Check the operation parameters and network conditions, then try again';
   };
 
+  // Collect all cross-contract calls from Soroban operations
+  const allCrossContractCalls = React.useMemo(() => {
+    const calls = transaction.crossContractCalls || [];
+    transaction.sorobanOperations?.forEach(op => {
+      if (op.crossContractCalls) {
+        calls.push(...op.crossContractCalls);
+      }
+    });
+    return calls;
+  }, [transaction]);
+
+  // Get main contract ID (first contract encountered)
+  const mainContractId = transaction.sorobanOperations?.[0]?.contractId;
+
   return (
     <div className="space-y-6">
+
       <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold">Transaction Details</h2>
@@ -193,23 +455,51 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
           </div>
 
           <div className="space-y-2">
-            <p className="text-sm text-gray-500">Fee</p>
+            <p className="text-sm text-gray-500">Transaction Fees</p>
             <Tooltip.Provider>
               <Tooltip.Root>
                 <Tooltip.Trigger asChild>
-                  <div className="font-medium cursor-help">
-                    {transaction.fee} stroops
-                    <span className="text-sm text-gray-500 ml-1">
-                      ({(parseInt(transaction.fee) / 10000000).toFixed(7)} XLM)
-                    </span>
+                  <div className="space-y-1 cursor-help">
+                    {transaction.feeCharged && (
+                      <div>
+                        <span className="text-xs text-gray-500">Fee Charged: </span>
+                        <span className="font-medium text-green-600">
+                          {transaction.feeCharged} stroops
+                        </span>
+                        <span className="text-sm text-gray-500 ml-1">
+                          ({(parseInt(transaction.feeCharged) / 10000000).toFixed(7)} XLM)
+                        </span>
+                      </div>
+                    )}
+                    {transaction.maxFee && (
+                      <div>
+                        <span className="text-xs text-gray-500">Max Fee: </span>
+                        <span className="font-medium text-gray-600">
+                          {transaction.maxFee} stroops
+                        </span>
+                        <span className="text-sm text-gray-500 ml-1">
+                          ({(parseInt(transaction.maxFee) / 10000000).toFixed(7)} XLM)
+                        </span>
+                      </div>
+                    )}
+                    {transaction.feeCharged && transaction.maxFee && parseInt(transaction.feeCharged) < parseInt(transaction.maxFee) && (
+                      <div className="text-xs text-green-600 font-medium">
+                        💰 Saved {(parseInt(transaction.maxFee) - parseInt(transaction.feeCharged)).toLocaleString()} stroops
+                      </div>
+                    )}
                   </div>
                 </Tooltip.Trigger>
                 <Tooltip.Portal>
                   <Tooltip.Content
-                    className="bg-white p-3 rounded-lg shadow-lg border border-gray-200"
+                    className="bg-white p-3 rounded-lg shadow-lg border border-gray-200 max-w-xs"
                     sideOffset={5}
                   >
-                    <p className="text-sm">1 XLM = 10,000,000 stroops</p>
+                    <div className="text-sm space-y-1">
+                      <p className="font-semibold">Transaction Fees Explained:</p>
+                      <p><strong>Fee Charged:</strong> The actual fee paid for this transaction</p>
+                      <p><strong>Max Fee:</strong> The maximum fee you authorized</p>
+                      <p className="text-xs text-gray-600 pt-1">1 XLM = 10,000,000 stroops</p>
+                    </div>
                     <Tooltip.Arrow className="fill-white" />
                   </Tooltip.Content>
                 </Tooltip.Portal>
@@ -328,6 +618,96 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
                   </div>
                 </div>
               </div>
+
+              {/* Enhanced Layer-by-Layer Error Analysis */}
+              {transaction.debugInfo?.errorAnalysis?.layers && transaction.debugInfo.errorAnalysis.layers.length > 0 && (
+                <div className="bg-gradient-to-br from-red-50 to-orange-50 rounded-lg p-6 border-2 border-red-200">
+                  <div className="flex items-start gap-3 mb-4">
+                    <AlertTriangle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <h3 className="text-lg font-semibold text-red-900">Error Analysis - Layer by Layer</h3>
+                      <p className="text-sm text-red-700 mt-1">Detailed breakdown of where and why the transaction failed</p>
+                    </div>
+                  </div>
+
+                  {transaction.debugInfo.feeBumpInfo && (
+                    <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                      <p className="text-sm font-medium text-blue-900 mb-2">💰 Fee Bump Transaction Detected</p>
+                      <div className="grid grid-cols-2 gap-2 text-xs text-blue-800">
+                        <div>
+                          <span className="font-medium">Fee Source:</span>
+                          <p className="font-mono mt-1 break-all">{transaction.debugInfo.feeBumpInfo.feeSource}</p>
+                        </div>
+                        <div>
+                          <span className="font-medium">Bump Fee:</span>
+                          <p className="font-mono mt-1">{transaction.debugInfo.feeBumpInfo.fee} stroops</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    {transaction.debugInfo.errorAnalysis.layers.map((layer, index) => (
+                      <div key={index} className="bg-white rounded-lg p-5 border-l-4 border-red-500 shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex items-start gap-3">
+                          <div className="flex-shrink-0 w-10 h-10 bg-gradient-to-br from-red-100 to-red-200 rounded-full flex items-center justify-center shadow-sm">
+                            <span className="text-red-700 font-bold text-base">{index + 1}</span>
+                          </div>
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-3">
+                              <h4 className="font-bold text-gray-900 text-base">{layer.level}</h4>
+                              {layer.operationType && (
+                                <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded font-medium">
+                                  {layer.operationType}
+                                </span>
+                              )}
+                            </div>
+                            <div className="space-y-3">
+                              <div className="flex items-start gap-2">
+                                <span className="text-xs font-semibold text-gray-600 min-w-[80px]">Code:</span>
+                                <code className="text-sm font-mono text-red-700 bg-red-50 px-2 py-1 rounded flex-1 font-semibold">
+                                  {layer.code}
+                                </code>
+                              </div>
+                              <div className="flex items-start gap-2">
+                                <span className="text-xs font-semibold text-gray-600 min-w-[80px]">Meaning:</span>
+                                <p className="text-sm text-gray-800 flex-1 leading-relaxed">{layer.meaning}</p>
+                              </div>
+                              {layer.envelopeType && (
+                                <div className="flex items-start gap-2">
+                                  <span className="text-xs font-semibold text-gray-600 min-w-[80px]">Envelope Type:</span>
+                                  <code className="text-xs font-mono text-blue-700 bg-blue-50 px-2 py-1 rounded flex-1">
+                                    {layer.envelopeType}
+                                  </code>
+                                </div>
+                              )}
+                              {layer.explanation && (
+                                <div className="mt-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                                  <div className="flex items-start gap-2">
+                                    <Info className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+                                    <p className="text-xs text-blue-900 leading-relaxed">
+                                      <span className="font-semibold">Explanation:</span> {layer.explanation}
+                                    </p>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {transaction.debugInfo.envelopeType && (
+                    <div className="mt-4 p-3 bg-gray-100 rounded-lg">
+                      <p className="text-xs text-gray-600">
+                        <span className="font-medium">Envelope Type:</span>{' '}
+                        <code className="font-mono">{transaction.debugInfo.envelopeType}</code>
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {transaction.debugInfo && (
                 <div className="bg-gray-50 rounded-lg">
@@ -478,6 +858,7 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
           )}
         </div>
 
+
         {/* Operation Details Section */}
         <div className="space-y-2">
           <p className="text-sm text-gray-500">Operations ({transaction.operations.length})</p>
@@ -499,7 +880,7 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
                     <p><span className="text-gray-600">Starting balance:</span> 
                        <span className="font-medium text-green-600 ml-1">{(op as any).starting_balance} XLM</span></p>
                     <p><span className="text-gray-600">Funded by:</span> 
-                       <span className="font-mono text-blue-600 ml-1">{op.source_account || transaction.sourceAccount}</span></p>
+                       <span className="font-mono text-blue-600 ml-1">{extractAccountAddress(op.source_account || transaction.sourceAccount)}</span></p>
                   </div>
                 )}
                 
@@ -519,7 +900,7 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
                 {op.type === 'begin_sponsoring_future_reserves' && (
                   <div className="space-y-1 text-sm">
                     <p><span className="text-gray-600">Sponsor:</span> 
-                       <span className="font-mono text-blue-600 ml-1">{op.source_account || transaction.sourceAccount}</span></p>
+                       <span className="font-mono text-blue-600 ml-1">{extractAccountAddress(op.source_account || transaction.sourceAccount)}</span></p>
                     <p><span className="text-gray-600">Sponsored account:</span> 
                        <span className="font-mono text-blue-600 ml-1">{(op as any).sponsored_id}</span></p>
                     <p className="text-xs text-gray-500">This account will pay for the sponsored account's reserves</p>
@@ -539,99 +920,28 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
                     sop.contractId || sop.functionName
                   ) || transaction.sorobanOperations?.[0];
 
-                  // Debug: Log what we have
-                  console.log('🎯 Rendering invoke_host_function:', {
-                    hasTransaction: !!transaction,
-                    hasSorobanOps: !!transaction.sorobanOperations,
-                    sorobanOpsLength: transaction.sorobanOperations?.length,
-                    sorobanOp: sorobanOp,
-                    operationIndex: index
+                  const sourceAccountAddr = extractAccountAddress(op.source_account || transaction.sourceAccount);
+
+                  console.log('🎨 RENDERING NEW SOROBAN STYLE - UPDATED VERSION', {
+                    contractId: sorobanOp?.contractId,
+                    functionName: sorobanOp?.functionName,
+                    eventsCount: sorobanOp?.events?.length
                   });
 
-                  const sourceAccountShort = (op.source_account || transaction.sourceAccount).slice(0, 4) + '…' +
-                                            (op.source_account || transaction.sourceAccount).slice(-4);
-                  const contractIdShort = sorobanOp?.contractId ?
-                    sorobanOp.contractId.slice(0, 4) + '…' + sorobanOp.contractId.slice(-4) : 'Unknown';
-
-                  // Ensure args are strings
-                  const argsArray = sorobanOp?.args ? sorobanOp.args.map((arg: any) =>
-                    typeof arg === 'string' ? arg : (typeof arg === 'object' ? JSON.stringify(arg) : String(arg))
-                  ) : [];
-
                   return (
-                    <div className="space-y-3 text-sm">
-                      {/* Main invocation summary */}
-                      <div className="p-3 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border border-blue-200">
-                        <p className="font-semibold text-gray-900 mb-2">
-                          {sourceAccountShort} invoked contract {contractIdShort} {sorobanOp?.functionName}({argsArray.slice(0, 2).join(', ')}{argsArray.length > 2 ? '...' : ''})
-                        </p>
-
-                        {argsArray.length > 0 && (
-                          <div className="mt-2 p-2 bg-white rounded border border-blue-100">
-                            <p className="text-xs text-gray-700 font-medium mb-1">📋 Parameters ({argsArray.length}):</p>
-                            <div className="font-mono text-xs text-blue-700 space-y-0.5">
-                              {argsArray.map((arg, i) => (
-                                <div key={i}>• {arg}</div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {sorobanOp?.stateChanges && sorobanOp.stateChanges.length > 0 && (
-                          <div className="mt-2 p-2 bg-green-50 rounded border border-green-200">
-                            <p className="text-xs text-green-900 font-medium mb-1">📝 State Changes:</p>
-                            {sorobanOp.stateChanges.map((change, i) => (
-                              <p key={i} className="text-xs text-green-800">
-                                • Contract {contractIdShort} {change.description}
-                              </p>
-                            ))}
-                          </div>
-                        )}
-
-                        {sorobanOp?.ttlExtensions && sorobanOp.ttlExtensions.length > 0 && (
-                          <div className="mt-2 p-2 bg-blue-50 rounded border border-blue-200">
-                            <p className="text-xs text-blue-900 font-medium mb-1">⏱️ TTL Extensions:</p>
-                            {sorobanOp.ttlExtensions.map((ttl, i) => (
-                              <p key={i} className="text-xs text-blue-800">
-                                • {ttl.description}
-                              </p>
-                            ))}
-                          </div>
-                        )}
-
-                        {sorobanOp?.resourceUsage && (
-                          <div className="mt-2 p-2 bg-amber-50 rounded border border-amber-200">
-                            <p className="text-xs text-amber-900 font-medium mb-1">💰 Fees:</p>
-                            <div className="grid grid-cols-3 gap-2 text-xs">
-                              {sorobanOp.resourceUsage.refundableFee > 0 && (
-                                <div className="text-amber-800">
-                                  <span className="font-medium">Refundable:</span><br />
-                                  {sorobanOp.resourceUsage.refundableFee.toLocaleString()}
-                                </div>
-                              )}
-                              {sorobanOp.resourceUsage.nonRefundableFee > 0 && (
-                                <div className="text-amber-800">
-                                  <span className="font-medium">Non-refundable:</span><br />
-                                  {sorobanOp.resourceUsage.nonRefundableFee.toLocaleString()}
-                                </div>
-                              )}
-                              {sorobanOp.resourceUsage.rentFee > 0 && (
-                                <div className="text-amber-800">
-                                  <span className="font-medium">Rent:</span><br />
-                                  {sorobanOp.resourceUsage.rentFee.toLocaleString()}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="text-xs text-gray-600 space-y-1 pl-2">
-                        <p><span className="font-medium">Source Account:</span> <span className="font-mono text-xs">{op.source_account || transaction.sourceAccount}</span></p>
-                        {sorobanOp?.contractId && (
-                          <p><span className="font-medium">Contract ID:</span> <span className="font-mono text-xs">{sorobanOp.contractId}</span></p>
-                        )}
-                      </div>
+                    <div className="space-y-1 text-sm">
+                      <p><span className="text-gray-600">Source Account:</span>
+                         <span className="font-mono text-blue-600 ml-1">{sourceAccountAddr}</span></p>
+                      {sorobanOp?.contractId && (
+                        <p><span className="text-gray-600">Contract ID:</span>
+                           <span className="font-mono text-blue-600 ml-1">{sorobanOp.contractId}</span></p>
+                      )}
+                      {sorobanOp?.functionName && (
+                        <p><span className="text-gray-600">Function:</span>
+                           <span className="font-mono text-purple-600 ml-1">
+                             {sorobanOp.functionName.replace('HostFunctionTypeHostFunctionType', '')}
+                           </span></p>
+                      )}
                     </div>
                   );
                 })()}
@@ -640,7 +950,7 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
                 {!['create_account', 'payment', 'begin_sponsoring_future_reserves', 'end_sponsoring_future_reserves', 'invoke_host_function'].includes(op.type) && (
                   <div className="space-y-1 text-sm">
                     <p><span className="text-gray-600">Source:</span> 
-                       <span className="font-mono text-blue-600 ml-1">{op.source_account || transaction.sourceAccount}</span></p>
+                       <span className="font-mono text-blue-600 ml-1">{extractAccountAddress(op.source_account || transaction.sourceAccount)}</span></p>
                   </div>
                 )}
               </div>
@@ -664,10 +974,24 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
               <span className="text-gray-600">Operations Count:</span>
               <span>{transaction.operations.length}</span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-gray-600">Fee Charged:</span>
-              <span>{transaction.fee} stroops ({(parseInt(transaction.fee) / 10000000).toFixed(7)} XLM)</span>
-            </div>
+            {transaction.feeCharged && (
+              <div className="flex justify-between">
+                <span className="text-gray-600">Fee Charged:</span>
+                <span className="text-green-600 font-medium">{transaction.feeCharged} stroops ({(parseInt(transaction.feeCharged) / 10000000).toFixed(7)} XLM)</span>
+              </div>
+            )}
+            {transaction.maxFee && (
+              <div className="flex justify-between">
+                <span className="text-gray-600">Max Fee (Authorized):</span>
+                <span>{transaction.maxFee} stroops ({(parseInt(transaction.maxFee) / 10000000).toFixed(7)} XLM)</span>
+              </div>
+            )}
+            {transaction.feeCharged && transaction.maxFee && parseInt(transaction.feeCharged) < parseInt(transaction.maxFee) && (
+              <div className="flex justify-between">
+                <span className="text-gray-600">Fee Savings:</span>
+                <span className="text-green-600 font-medium">{(parseInt(transaction.maxFee) - parseInt(transaction.feeCharged)).toLocaleString()} stroops</span>
+              </div>
+            )}
             {transaction.sorobanOperations && transaction.sorobanOperations.length > 0 && (
               <div className="flex justify-between">
                 <span className="text-gray-600">Soroban Operations:</span>
@@ -680,6 +1004,57 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
                 <span>{transaction.events.length}</span>
               </div>
             )}
+{(() => {
+              // Debug logging
+              console.log('🔍 Debug Info - Checking resource usage:', {
+                hasSimulationResult: !!transaction.simulationResult,
+                hasEnhancedDebugInfo: !!transaction.simulationResult?.enhancedDebugInfo,
+                hasResourceUsage: !!transaction.simulationResult?.enhancedDebugInfo?.resourceUsage,
+                resourceUsage: transaction.simulationResult?.enhancedDebugInfo?.resourceUsage,
+                cpuInstructions: transaction.simulationResult?.enhancedDebugInfo?.resourceUsage?.cpuInstructions,
+                memoryBytes: transaction.simulationResult?.enhancedDebugInfo?.resourceUsage?.memoryBytes
+              });
+
+              const resourceUsage = transaction.simulationResult?.enhancedDebugInfo?.resourceUsage;
+              if (!resourceUsage) return null;
+
+              return (
+                <>
+                  {resourceUsage.cpuInstructions > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">CPU Instructions:</span>
+                      <span className="font-mono text-blue-600 font-medium">
+                        {resourceUsage.cpuInstructions.toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+                  {resourceUsage.memoryBytes > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Memory Usage:</span>
+                      <span className="font-mono text-blue-600 font-medium">
+                        {resourceUsage.memoryBytes.toLocaleString()} bytes
+                      </span>
+                    </div>
+                  )}
+                  {resourceUsage.readBytes > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Ledger Read:</span>
+                      <span className="font-mono text-blue-600 font-medium">
+                        {resourceUsage.readBytes.toLocaleString()} bytes
+                      </span>
+                    </div>
+                  )}
+                  {resourceUsage.writeBytes > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Ledger Write:</span>
+                      <span className="font-mono text-blue-600 font-medium">
+                        {resourceUsage.writeBytes.toLocaleString()} bytes
+                      </span>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
           
           {/* Stack trace for failed transactions */}
@@ -691,6 +1066,7 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
               </p>
             </div>
           )}
+
         </div>
       </div>
     </div>
