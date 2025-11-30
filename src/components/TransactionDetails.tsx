@@ -258,9 +258,6 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
 
   // Debug logging
   React.useEffect(() => {
-    console.log('🔍 TransactionDetails - Full transaction object:', transaction);
-    console.log('🔍 TransactionDetails - debugInfo:', transaction.debugInfo);
-    console.log('🔍 TransactionDetails - errorAnalysis:', transaction.debugInfo?.errorAnalysis);
   }, [transaction]);
 
   const getStatusIcon = () => {
@@ -922,12 +919,6 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
 
                   const sourceAccountAddr = extractAccountAddress(op.source_account || transaction.sourceAccount);
 
-                  console.log('🎨 RENDERING NEW SOROBAN STYLE - UPDATED VERSION', {
-                    contractId: sorobanOp?.contractId,
-                    functionName: sorobanOp?.functionName,
-                    eventsCount: sorobanOp?.events?.length
-                  });
-
                   return (
                     <div className="space-y-1 text-sm">
                       <p><span className="text-gray-600">Source Account:</span>
@@ -1006,14 +997,6 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
             )}
 {(() => {
               // Debug logging
-              console.log('🔍 Debug Info - Checking resource usage:', {
-                hasSimulationResult: !!transaction.simulationResult,
-                hasEnhancedDebugInfo: !!transaction.simulationResult?.enhancedDebugInfo,
-                hasResourceUsage: !!transaction.simulationResult?.enhancedDebugInfo?.resourceUsage,
-                resourceUsage: transaction.simulationResult?.enhancedDebugInfo?.resourceUsage,
-                cpuInstructions: transaction.simulationResult?.enhancedDebugInfo?.resourceUsage?.cpuInstructions,
-                memoryBytes: transaction.simulationResult?.enhancedDebugInfo?.resourceUsage?.memoryBytes
-              });
 
               const resourceUsage = transaction.simulationResult?.enhancedDebugInfo?.resourceUsage;
               if (!resourceUsage) return null;

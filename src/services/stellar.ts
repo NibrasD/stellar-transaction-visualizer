@@ -1,11 +1,12 @@
 import { Horizon } from '@stellar/stellar-sdk';
 import * as StellarSdk from '@stellar/stellar-sdk';
-import type { 
-  TransactionDetails, 
-  NetworkConfig, 
-  SorobanOperation, 
-  ContractEvent, 
-  SimulationResult 
+import { Buffer } from 'buffer';
+import type {
+  TransactionDetails,
+  NetworkConfig,
+  SorobanOperation,
+  ContractEvent,
+  SimulationResult
 } from '../types/stellar';
 import { Node, Edge } from 'reactflow';
 
@@ -159,10 +160,10 @@ export function decodeScVal(scVal: any): any {
           const bytes = serializedBufferToUint8Array(nativeValue);
           if (bytes.length === 32) {
             try {
-              return StellarSdk.StrKey.encodeContract(bytes);
+              return StellarSdk.StrKey.encodeContract(Buffer.from(bytes));
             } catch {
               try {
-                return StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+                return StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(bytes));
               } catch {
                 const hex = Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join('');
                 return hex.length > 32 ? `0x${hex.slice(0, 16)}...${hex.slice(-16)}` : `0x${hex}`;
@@ -179,10 +180,10 @@ export function decodeScVal(scVal: any): any {
           const bytes = nativeValue instanceof Uint8Array ? nativeValue : new Uint8Array(Array.from(nativeValue as any));
           if (bytes.length === 32) {
             try {
-              return StellarSdk.StrKey.encodeContract(bytes);
+              return StellarSdk.StrKey.encodeContract(Buffer.from(bytes));
             } catch {
               try {
-                return StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+                return StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(bytes));
               } catch {
                 const hex = Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join('');
                 return hex.length > 32 ? `0x${hex.slice(0, 16)}...${hex.slice(-16)}` : `0x${hex}`;
@@ -239,11 +240,11 @@ export function decodeScVal(scVal: any): any {
           if (nativeValue.length === 32) {
             try {
               // Try as account address (G...)
-              return StellarSdk.StrKey.encodeEd25519PublicKey(nativeValue);
+              return StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(Array.from(nativeValue)));
             } catch (e1) {
               try {
                 // Try as contract address (C...)
-                return StellarSdk.StrKey.encodeContract(nativeValue);
+                return StellarSdk.StrKey.encodeContract(Buffer.from(Array.from(nativeValue)));
               } catch (e2) {
                 // Not an address, show as hex
                 const hex = nativeValue.toString('hex');
@@ -260,11 +261,11 @@ export function decodeScVal(scVal: any): any {
           if (nativeValue.length === 32) {
             try {
               // Try as account address (G...)
-              return StellarSdk.StrKey.encodeEd25519PublicKey(nativeValue);
+              return StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(Array.from(nativeValue)));
             } catch (e1) {
               try {
                 // Try as contract address (C...)
-                return StellarSdk.StrKey.encodeContract(nativeValue);
+                return StellarSdk.StrKey.encodeContract(Buffer.from(Array.from(nativeValue)));
               } catch (e2) {
                 // Not an address, show as hex
                 const bytes = Array.from(nativeValue);
@@ -286,7 +287,6 @@ export function decodeScVal(scVal: any): any {
       return nativeValue;
     } catch (nativeError) {
       // If scValToNative fails, fall back to manual decoding
-      console.warn('scValToNative failed, using manual decode:', nativeError);
     }
 
     const type = scVal.switch().name;
@@ -380,7 +380,6 @@ export function decodeScVal(scVal: any): any {
         return type;
     }
   } catch (e) {
-    console.warn('ScVal decode error:', e);
     return '(decode error)';
   }
 }
@@ -403,16 +402,10 @@ function formatAddress(address: string): string {
 
 export const fetchTransaction = async (hash: string): Promise<TransactionDetails> => {
   try {
-    console.log('📡 Fetching transaction:', hash);
-    console.log('🌐 Network:', networkConfig.isTestnet ? 'TESTNET' : 'MAINNET');
-    console.log('🌐 Horizon URL:', networkConfig.networkUrl);
-    console.log('🔧 Server instance:', server ? 'initialized' : 'NOT INITIALIZED');
 
     if (!server) {
       throw new Error('Horizon server not initialized. Please refresh the page.');
     }
-
-    console.log('⏳ Calling Horizon API...');
     const tx = await server.transactions().transaction(hash).call();
 
     // Fetch full transaction data from Horizon to get XDR fields
@@ -420,15 +413,10 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
     let sorobanMetaXdr = null;
     try {
       const horizonUrl = `${networkConfig.networkUrl}/transactions/${hash}`;
-      console.log('🔍 Fetching transaction data from:', horizonUrl);
       const response = await fetch(horizonUrl);
       const txData = await response.json();
 
       const xdrFields = Object.keys(txData).filter(k => k.includes('xdr') || k.includes('meta'));
-      console.log('🔍 XDR fields in Horizon response:', xdrFields);
-      console.log('🔍 result_meta_xdr available in outer tx:', !!txData.result_meta_xdr);
-      console.log('🔍 resultMetaXdr field:', !!txData.resultMetaXdr);
-      console.log('🔍 All XDR field values:', xdrFields.map(f => ({ field: f, exists: !!(txData as any)[f] })));
 
       // Get available XDR fields - try both snake_case and camelCase
       resultMetaXdr = txData.result_meta_xdr || (txData as any).resultMetaXdr;
@@ -442,7 +430,6 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
       if (txData.soroban_meta_xdr) {
         sorobanMetaXdr = txData.soroban_meta_xdr;
         (tx as any).soroban_meta_xdr = sorobanMetaXdr;
-        console.log('✅ Found soroban_meta_xdr in response');
       }
 
       // Check if this is a fee-bumped transaction
@@ -451,50 +438,36 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
         try {
           const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(envelopeXdr, 'base64');
           const envelopeType = envelope.switch().name;
-          console.log('🔍 Envelope type:', envelopeType);
 
           if (envelopeType === 'envelopeTypeTxFeeBump' && envelope.feeBump()) {
-            console.log('🎯 Fee-bumped transaction detected!');
             const innerTx = envelope.feeBump().tx().innerTx();
             const innerTxType = innerTx.switch().name;
-            console.log('🔍 Inner transaction type:', innerTxType);
 
             // Check if inner_transaction field exists in Horizon response
-            console.log('🔍 Checking for inner_transaction field...');
-            console.log('  - txData.inner_transaction exists:', !!txData.inner_transaction);
             if (txData.inner_transaction) {
-              console.log('  - inner_transaction keys:', Object.keys(txData.inner_transaction));
             }
 
             // For fee-bumped Soroban transactions, the inner transaction hash is available in Horizon response
             if (txData.inner_transaction && txData.inner_transaction.hash) {
               const innerHash = txData.inner_transaction.hash;
-              console.log('🔍 Inner transaction hash from Horizon:', innerHash);
 
               // Fetch the inner transaction to get soroban_meta_xdr
               const innerUrl = `${networkConfig.networkUrl}/transactions/${innerHash}`;
-              console.log('🔍 Fetching inner transaction from:', innerUrl);
               try {
                 const innerResponse = await fetch(innerUrl);
                 const innerTxData = await innerResponse.json();
-
-                console.log('🔍 Inner transaction response keys:', Object.keys(innerTxData));
                 const innerXdrFields = Object.keys(innerTxData).filter(k => k.includes('xdr') || k.includes('meta'));
-                console.log('🔍 XDR fields in inner transaction:', innerXdrFields);
                 innerXdrFields.forEach(field => {
-                  console.log(`  - ${field}: ${innerTxData[field] ? 'EXISTS' : 'null'}`);
                 });
 
                 // Try to get soroban_meta_xdr from inner transaction
                 if (innerTxData.soroban_meta_xdr) {
                   sorobanMetaXdr = innerTxData.soroban_meta_xdr;
                   (tx as any).soroban_meta_xdr = sorobanMetaXdr;
-                  console.log('✅ Found soroban_meta_xdr in INNER transaction');
                 }
 
                 // For result_meta_xdr, check inner transaction (it may have more detailed data)
                 if (innerTxData.result_meta_xdr) {
-                  console.log('✅ Using result_meta_xdr from inner transaction');
                   resultMetaXdr = innerTxData.result_meta_xdr;
                   (tx as any).result_meta_xdr = resultMetaXdr;
                   (tx as any).result_xdr = innerTxData.result_xdr;
@@ -505,26 +478,21 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
                     (tx as any).soroban_meta_xdr = sorobanMetaXdr;
                   }
                 } else {
-                  console.log('ℹ️ Keeping result_meta_xdr from outer transaction');
                   // Keep the outer transaction's result_meta_xdr (already set above)
                 }
               } catch (innerErr) {
-                console.warn('⚠️ Could not fetch inner transaction:', innerErr);
               }
             }
           }
         } catch (xdrErr) {
-          console.warn('⚠️ Could not decode envelope XDR:', xdrErr);
         }
       }
 
       // If result_meta_xdr is not available, try to extract resources from result_xdr
       if (!resultMetaXdr && txData.result_xdr) {
-        console.log('ℹ️ result_meta_xdr not available, will extract resources from result_xdr');
         try {
           const resultXdr = StellarSdk.xdr.TransactionResult.fromXDR(txData.result_xdr, 'base64');
           const resultCode = resultXdr.result().switch().name;
-          console.log('🔍 Transaction result code:', resultCode);
 
           // For successful Soroban transactions, extract resource usage from result
           if (resultCode === 'txSuccess' || resultCode === 'txFeeBumpInnerSuccess') {
@@ -532,22 +500,17 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
               ? resultXdr.result().innerResultPair().result().result().results()
               : resultXdr.result().results();
 
-            console.log('🔍 Number of operation results:', results?.length || 0);
-
             // Look for InvokeHostFunction results
             if (results && results.length > 0) {
               for (let i = 0; i < results.length; i++) {
                 const opResult = results[i];
                 const opCode = opResult.tr().switch().name;
-                console.log(`🔍 Operation ${i} result type:`, opCode);
 
                 if (opCode === 'invokeHostFunction') {
                   const invokeResult = opResult.tr().invokeHostFunctionResult();
                   const invokeCode = invokeResult.switch().name;
-                  console.log(`  - InvokeHostFunction result code:`, invokeCode);
 
                   if (invokeCode === 'invokeHostFunctionSuccess') {
-                    console.log('✅ Found successful InvokeHostFunction result, storing for resource extraction');
                     // Store the result for later resource extraction
                     (tx as any).__sorobanInvokeResult = invokeResult;
                   }
@@ -556,57 +519,29 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
             }
           }
         } catch (resultErr) {
-          console.warn('⚠️ Could not parse result_xdr:', resultErr);
         }
       }
 
-      console.log('📦 XDR Summary:', {
-        result_meta_xdr: !!resultMetaXdr,
-        soroban_meta_xdr: !!sorobanMetaXdr,
-        envelope_xdr: !!txData.envelope_xdr,
-        result_xdr: !!txData.result_xdr,
-        has_soroban_result: !!(tx as any).__sorobanInvokeResult
-      });
-
       // Extract resource usage from envelope sorobanData (for historical transactions)
-      console.log('🔍 Checking if we should extract from envelope:', {
-        has_envelope_xdr: !!txData.envelope_xdr,
-        has_result_meta_xdr: !!resultMetaXdr,
-        has_soroban_meta_xdr: !!sorobanMetaXdr,
-        should_extract: !!(txData.envelope_xdr && !resultMetaXdr && !sorobanMetaXdr)
-      });
 
       if (txData.envelope_xdr && !resultMetaXdr && !sorobanMetaXdr) {
-        console.log('🔍 Attempting to extract resources from envelope sorobanData...');
         try {
           const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(txData.envelope_xdr, 'base64');
           let txToCheck = null;
 
-          console.log('🔍 Envelope type:', envelope.switch().name);
-
           // Handle fee-bumped transactions
           if (envelope.switch().name === 'envelopeTypeTxFeeBump' && envelope.feeBump()) {
-            console.log('🔍 Processing fee-bumped envelope...');
             const innerTx = envelope.feeBump().tx().innerTx();
-            console.log('🔍 Inner tx type:', innerTx.switch().name);
             if (innerTx.switch().name === 'envelopeTypeTx') {
               txToCheck = innerTx.v1().tx();
-              console.log('✅ Got inner transaction to check');
             }
           } else if (envelope.switch().name === 'envelopeTypeTx' && envelope.v1()) {
-            console.log('🔍 Processing standard envelope...');
             txToCheck = envelope.v1().tx();
-            console.log('✅ Got transaction to check');
           }
 
           if (txToCheck) {
-            console.log('🔍 Checking transaction ext...');
-            console.log('🔍 txToCheck keys:', Object.keys(txToCheck));
-            console.log('🔍 txToCheck._attributes:', txToCheck._attributes ? Object.keys(txToCheck._attributes) : 'none');
 
             const ext = txToCheck.ext ? txToCheck.ext() : null;
-            console.log('🔍 Ext result:', ext);
-            console.log('🔍 Ext switch:', ext ? (ext.switch ? ext.switch().name : 'no switch method') : 'null');
 
             if (ext) {
               // Check the internal structure (_switch: 1 means v1 extension)
@@ -614,60 +549,28 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
               const extArm = (ext as any)._arm;
               const extValue = (ext as any)._value;
 
-              console.log('🔍 Extension internal structure:', {
-                _switch: extSwitch,
-                _arm: extArm,
-                _value: !!extValue
-              });
-
               // _switch: 1 means v1 extension (Soroban)
               if (extSwitch === 1 && extArm === 'sorobanData' && extValue) {
-                console.log('✅ Found v1 extension with sorobanData!');
 
                 try {
                   // The sorobanData is in _value
                   const sorobanData = extValue;
-                  console.log('✅ Got sorobanData from extension._value');
 
                   // Store for later extraction
                   (tx as any).__envelopeSorobanData = sorobanData.toXDR('base64');
-                  console.log('✅ Stored sorobanData XDR for later extraction');
                 } catch (xdrErr) {
-                  console.error('❌ Error converting sorobanData to XDR:', xdrErr);
                 }
               } else {
-                console.log('❌ Extension structure not recognized:', {
-                  extSwitch,
-                  extArm,
-                  hasValue: !!extValue
-                });
               }
             } else {
-              console.log('❌ Transaction has no extension (ext is null)');
             }
           } else {
-            console.log('❌ txToCheck is null - could not extract transaction');
           }
         } catch (envErr) {
-          console.warn('⚠️ Could not extract sorobanData from envelope:', envErr);
         }
       }
     } catch (err) {
-      console.warn('⚠️ Failed to fetch transaction XDR data:', err);
     }
-
-    console.log('✅ Transaction fetched successfully:', {
-      id: tx.id,
-      successful: tx.successful,
-      operation_count: tx.operation_count,
-      created_at: tx.created_at,
-      has_result_meta_xdr: !!resultMetaXdr,
-      has_envelope_xdr: !!(tx as any).envelope_xdr
-    });
-
-    console.log('🔍 Transaction successful status:', tx.successful);
-
-    console.log('⏳ Fetching operations...');
     const operations = await server.operations()
       .forTransaction(hash)
       .limit(200)
@@ -678,18 +581,11 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
       ...op,
       source_account: extractAccountAddress(op.source_account)
     }));
-
-    console.log('✅ Operations fetched:', operations.records.length);
     
     // Log each operation in detail
     operations.records.forEach((op, index) => {
-      console.log(`\n🔍 OPERATION ${index + 1} DETAILED ANALYSIS:`);
-      console.log(`Type: ${op.type}`);
-      console.log(`Full Operation Object:`, JSON.stringify(op, null, 2));
       
       if (op.type === 'invoke_host_function') {
-        console.log(`\n🎯 INVOKE_HOST_FUNCTION OPERATION ${index + 1}:`);
-        console.log('All available fields:', Object.keys(op));
         
         // Check every possible field that might contain contract info
         const possibleContractFields = [
@@ -701,14 +597,12 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
         
         possibleContractFields.forEach(field => {
           if ((op as any)[field] !== undefined) {
-            console.log(`Found field '${field}':`, (op as any)[field]);
           }
         });
 
         // Deep scan for any field containing 'C' followed by base32 characters
         const scanForContractIds = (obj: any, path = ''): void => {
           if (typeof obj === 'string' && /^C[A-Z2-7]{55,62}$/.test(obj)) {
-            console.log(`🎯 POTENTIAL CONTRACT ID FOUND at ${path}:`, obj);
           }
           if (typeof obj === 'object' && obj !== null) {
             Object.entries(obj).forEach(([key, value]) => {
@@ -716,8 +610,6 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
             });
           }
         };
-        
-        console.log('🔍 Scanning entire operation for contract IDs...');
         scanForContractIds(op, 'operation');
       }
     });
@@ -730,15 +622,12 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
     let sorobanData = null;
     try {
       sorobanData = await querySorobanRpc(hash);
-      console.log('🔮 Soroban RPC response:', sorobanData);
 
       // CRITICAL: Add resultMetaXdr from RPC to tx object for state changes extraction
       if (sorobanData && sorobanData.resultMetaXdr) {
         (tx as any).result_meta_xdr = sorobanData.resultMetaXdr;
-        console.log('✅ Added result_meta_xdr from Soroban RPC to tx object');
       } else if (sorobanData && sorobanData.status === 'NOT_FOUND') {
         // Transaction not found in primary RPC, try alternative endpoints
-        console.log('⚠️ Transaction not found in primary Soroban RPC, trying alternatives...');
 
         const alternativeRpcUrls = networkConfig.isTestnet
           ? ['https://soroban-testnet.stellar.org', 'https://rpc-futurenet.stellar.org']
@@ -746,7 +635,6 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
 
         for (const rpcUrl of alternativeRpcUrls) {
           try {
-            console.log(`🔄 Trying alternative RPC: ${rpcUrl}`);
             const altResponse = await fetch(rpcUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -759,18 +647,15 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
             });
             const altData = await altResponse.json();
             if (altData.result && altData.result.status === 'SUCCESS' && altData.result.resultMetaXdr) {
-              console.log(`✅ Found transaction in alternative RPC: ${rpcUrl}`);
               sorobanData = altData.result;
               (tx as any).result_meta_xdr = altData.result.resultMetaXdr;
               break;
             }
           } catch (altError) {
-            console.warn(`❌ Alternative RPC ${rpcUrl} failed:`, altError);
           }
         }
       }
     } catch (sorobanError) {
-      console.warn('⚠️ Soroban RPC query failed:', sorobanError);
     }
 
     // Process operations and extract contract IDs
@@ -778,17 +663,14 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
 
     for (let i = 0; i < operations.records.length; i++) {
       const op = operations.records[i];
-      console.log(`🔍 Processing operation ${i}:`, op);
 
       if (op.type === 'invoke_host_function') {
-        console.log('🎯 Found invoke_host_function operation:', op);
 
         // Try multiple extraction methods - pass transaction envelope XDR directly
         const contractId = await extractContractId(op, sorobanData, i, tx.hash, tx.envelope_xdr);
 
         if (contractId && contractId !== 'Unknown') {
           contractIds.set(i, contractId);
-          console.log(`✅ Contract ID found for operation ${i}:`, contractId);
 
           // Fetch effects for this operation
           let opEffects: any[] = [];
@@ -796,7 +678,6 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
           try {
             const effectsResponse = await server.effects().forOperation(op.id).limit(200).call();
             opEffects = effectsResponse.records || [];
-            console.log(`✅ Fetched ${opEffects.length} effects for operation ${i}`);
 
             // Convert effects to events format for display
             opEvents = opEffects
@@ -809,11 +690,10 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
                 ...effect
               }));
           } catch (effectsError) {
-            console.warn(`⚠️ Could not fetch effects for operation ${i}:`, effectsError);
           }
 
           // Extract function details with enhanced data
-          const functionDetails = extractFunctionDetails(op, sorobanData, i, tx);
+          const functionDetails = extractFunctionDetails(op, sorobanData, i, tx, contractId);
 
           // Merge fetched events with extracted events
           const allEvents = [...(functionDetails.events || []), ...opEvents];
@@ -868,25 +748,13 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
             ...(functionDetails.hostFunctionType && { hostFunctionType: functionDetails.hostFunctionType })
           } as any);
 
-          console.log(`📦 Pushed soroban operation ${i}:`, {
-            contractId,
-            functionName: functionDetails.functionName,
-            argsCount: functionDetails.args?.length,
-            eventsCount: functionDetails.events?.length,
-            stateChangesCount: functionDetails.stateChanges?.length,
-            ttlExtensionsCount: functionDetails.ttlExtensions?.length,
-            hasResourceUsage: !!functionDetails.resourceUsage
-          });
-
           // Extract events for this operation
           if (functionDetails.events && functionDetails.events.length > 0) {
-            console.log(`🔍 Processing ${functionDetails.events.length} events for operation ${i}`);
 
             const filteredEvents = functionDetails.events
               .filter((event: any) => {
                 // Keep events with topics OR data
                 if (!event.topics && !event.data) {
-                  console.log('  Filtering out event with no topics or data');
                   return false;
                 }
 
@@ -900,13 +768,9 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
 
                     // Don't filter fn_call and fn_return - we need them!
                     if (eventType === 'diagnostic_event') {
-                      console.log(`  Filtering out diagnostic event: ${eventType}`);
                       return false;
                     }
-
-                    console.log(`  Keeping event with type: ${eventType}`);
                   } catch (e) {
-                    console.log('  Could not determine event type, keeping event');
                   }
                 }
 
@@ -916,14 +780,6 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
                 const decodedTopics = (event.topics || []).map((t: any) => decodeScVal(t));
                 const decodedData = event.data ? decodeScVal(event.data) : null;
 
-                console.log(`🔍 Decoded event:`, {
-                  type: event.type,
-                  rawTopics: event.topics,
-                  decodedTopics,
-                  rawData: event.data,
-                  decodedData
-                });
-
                 return {
                   contractId: event.contractId || contractId,
                   type: event.type,
@@ -932,12 +788,9 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
                   inSuccessfulContractCall: event.inSuccessfulContractCall
                 };
               });
-
-            console.log(`✅ Added ${filteredEvents.length} events to transaction events array`);
             events.push(...filteredEvents);
           }
         } else {
-          console.warn(`❌ Could not extract contract ID for operation ${i}`);
           
           // Add a placeholder soroban operation
           sorobanOperations.push({
@@ -955,17 +808,15 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
     // Fetch transaction effects
     let effects: any[] = [];
     try {
-      console.log('🔍 Fetching effects for transaction:', hash);
       const effectsResponse = await tx.effects({ limit: 200 });
       effects = effectsResponse.records || [];
-      console.log(`✅ Fetched ${effects.length} effects`);
     } catch (effectsError: any) {
-      console.warn('⚠️ Could not fetch effects:', effectsError.message);
     }
+    const sourceAccount = extractAccountAddress(tx.source_account);
 
     const result: TransactionDetails = {
       hash: tx.hash,
-      sourceAccount: extractAccountAddress(tx.source_account),
+      sourceAccount,
       fee: String((tx as any).fee_charged || (tx as any).fee_paid || '0'),
       feeCharged: String((tx as any).fee_charged || (tx as any).fee_paid || '0'),
       maxFee: String(tx.max_fee || '0'),
@@ -986,42 +837,30 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
       // Try to decode XDR for better error analysis
       try {
         result.debugInfo = await decodeTransactionXdr(tx);
-        console.log('🔍 debugInfo set in fetchTransaction:', result.debugInfo);
-        console.log('🔍 errorAnalysis in debugInfo:', result.debugInfo?.errorAnalysis);
       } catch (xdrError) {
-        console.warn('XDR decoding failed:', xdrError);
       }
     }
 
     // Add simulation result for Soroban transactions
     if (sorobanOperations.length > 0) {
       try {
-        console.log('🔬 Generating simulation result for Soroban transaction...');
-        console.log('🔍 tx has __sorobanInvokeResult:', !!(tx as any).__sorobanInvokeResult);
         // Attach XDR metadata to tx object for use in simulation
         const txWithMeta = {
           ...tx,
           result_meta_xdr: resultMetaXdr,
           soroban_meta_xdr: sorobanMetaXdr
         };
-        console.log('🔍 txWithMeta has __sorobanInvokeResult:', !!(txWithMeta as any).__sorobanInvokeResult);
         const simResult = await simulateTransactionWithDebugger(hash, txWithMeta);
         result.simulationResult = {
           ...simResult.simulation,
           enhancedDebugInfo: simResult.debugInfo
         };
-        console.log('✅ Simulation result attached with enhanced debug info:', !!result.simulationResult);
-        console.log('✅ Debug info logs count:', simResult.debugInfo?.logs?.length || 0);
       } catch (simError) {
-        console.warn('⚠️ Failed to generate simulation result:', simError);
       }
     }
-
-    console.log('🎉 Final transaction result:', result);
     return result;
 
   } catch (error: any) {
-    console.error('❌ Error fetching transaction:', error);
     throw new Error(`Failed to fetch transaction: ${error.message}`);
   }
 };
@@ -1096,8 +935,6 @@ const querySorobanRpc = async (hash: string) => {
     ? 'https://soroban-testnet.stellar.org'
     : 'https://mainnet.sorobanrpc.com';
 
-  console.log('🔮 Querying Soroban RPC:', rpcUrl);
-
   const response = await fetch(rpcUrl, {
     method: 'POST',
     headers: {
@@ -1123,26 +960,18 @@ const querySorobanRpc = async (hash: string) => {
     throw new Error(`Soroban RPC error: ${data.error.message}`);
   }
 
-  console.log('🔍 RPC Response keys:', data.result ? Object.keys(data.result) : 'null');
-  console.log('🔍 RPC Response.resultMetaXdr type:', typeof data.result?.resultMetaXdr);
-
   // Log all field names to find the meta XDR
   if (data.result) {
-    console.log('🔍 All RPC fields:');
     Object.keys(data.result).forEach(key => {
       const value = data.result[key];
       const type = typeof value;
       const preview = type === 'string' ? (value.length > 50 ? `${value.substring(0, 50)}...` : value) : type;
-      console.log(`  ${key}: ${type} = ${preview}`);
     });
 
     // Check if status is SUCCESS and resultMetaXdr exists
     if (data.result.status === 'SUCCESS' && data.result.resultMetaXdr) {
-      console.log('✅ Transaction successful with resultMetaXdr');
     } else if (data.result.status === 'NOT_FOUND') {
-      console.log('⚠️ Transaction not found in Soroban RPC (may be too old or not yet indexed)');
     } else if (data.result.status === 'FAILED') {
-      console.log('⚠️ Transaction failed');
     }
   }
 
@@ -1150,19 +979,12 @@ const querySorobanRpc = async (hash: string) => {
 };
 
 const extractContractId = async (operation: any, sorobanData: any, operationIndex: number, transactionHash?: string, envelopeXdr?: string): Promise<string> => {
-  console.log(`\n🔍 EXTRACTING CONTRACT ID FOR OPERATION ${operationIndex}:`);
-  console.log(`Network: ${networkConfig.isTestnet ? 'TESTNET' : 'MAINNET'}`);
-  console.log(`Operation type: ${operation.type}`);
-  console.log(`Transaction hash provided: ${transactionHash || 'NO'}`);
-  console.log(`Envelope XDR provided: ${envelopeXdr ? 'YES' : 'NO'}`);
   
   if (operation.type !== 'invoke_host_function') {
-    console.log('❌ Not an invoke_host_function operation, skipping');
     return `Non_Contract_Op${operationIndex + 1}`;
   }
   
   // Method 0: Direct field extraction with extensive logging
-  console.log('🔍 METHOD 0: Direct field extraction');
   const directFields = [
     'contract_id', 'contractId', 'contract_address', 'contractAddress',
     'address', 'contract', 'target', 'destination', 'account_id'
@@ -1170,49 +992,38 @@ const extractContractId = async (operation: any, sorobanData: any, operationInde
 
   for (const field of directFields) {
     if (operation[field]) {
-      console.log(`Found ${field}:`, operation[field]);
       if (typeof operation[field] === 'string' && /^C[A-Z2-7]{55,62}$/.test(operation[field])) {
-        console.log(`✅ METHOD 0 SUCCESS - Valid contract ID found in ${field}:`, operation[field]);
         return operation[field];
       }
     }
   }
 
   // Method 0.5: Check parameters array for contract address
-  console.log('🔍 METHOD 0.5: Parameters array extraction');
   if (operation.parameters && Array.isArray(operation.parameters)) {
-    console.log(`Found parameters array with ${operation.parameters.length} items`);
     for (let i = 0; i < operation.parameters.length; i++) {
       const param = operation.parameters[i];
-      console.log(`Parameter ${i}:`, param);
 
       if (param.type === 'Address' && param.value) {
         try {
           // The value is base64 XDR, decode it
           const scVal = StellarSdk.xdr.ScVal.fromXDR(param.value, 'base64');
-          console.log('Decoded ScVal type:', scVal.switch().name);
 
           if (scVal.switch() === StellarSdk.xdr.ScValType.scvAddress()) {
             const address = scVal.address();
-            console.log('Found address in ScVal, type:', address.switch().name);
 
             if (address.switch() === StellarSdk.xdr.ScAddressType.scAddressTypeContract()) {
-              const contractId = StellarSdk.StrKey.encodeContract(address.contractId());
-              console.log(`✅ METHOD 0.5 SUCCESS - Contract ID from parameters[${i}]:`, contractId);
-              return contractId;
+              const contractId = Buffer.from(Array.from(address.contractId() as any));
+              return StellarSdk.StrKey.encodeContract(contractId);
             }
           }
         } catch (paramError) {
-          console.log(`Failed to decode parameter ${i}:`, paramError.message);
         }
       }
     }
   }
   
   // Method 1: Host function field extraction
-  console.log('🔍 METHOD 1: Host function field extraction');
   if (operation.type === 'invoke_host_function' && operation.host_function) {
-    console.log('Found host_function field:', operation.host_function);
     try {
       const hostFunctionXdr = operation.host_function;
       
@@ -1223,136 +1034,97 @@ const extractContractId = async (operation: any, sorobanData: any, operationInde
         const contractAddress = invokeContract.contractAddress();
         
         if (contractAddress.switch() === StellarSdk.xdr.ScAddressType.scAddressTypeContract()) {
-          const contractId = contractAddress.contractId();
+          const contractId = Buffer.from(Array.from(contractAddress.contractId() as any));
           const contractIdStr = StellarSdk.StrKey.encodeContract(contractId);
-          console.log('✅ Extracted contract ID from host_function:', contractIdStr);
           return contractIdStr;
         }
       }
     } catch (hostFunctionError) {
-      console.log('❌ METHOD 1 FAILED:', hostFunctionError.message);
     }
   }
   
   // Method 2: Parameters extraction
-  console.log('🔍 METHOD 2: Parameters extraction');
   if (operation.parameters) {
-    console.log('Found parameters:', operation.parameters);
     try {
       const params = operation.parameters;
       if (params.contractAddress) {
-        console.log('✅ METHOD 2 SUCCESS - Contract address in parameters:', params.contractAddress);
         return params.contractAddress;
       }
       if (params.contractId) {
-        console.log('✅ METHOD 2 SUCCESS - Contract ID in parameters:', params.contractId);
         return params.contractId;
       }
     } catch (paramError) {
-      console.log('❌ METHOD 2 FAILED:', paramError.message);
     }
   }
 
   // Method 3: Soroban RPC data
-  console.log('🔍 METHOD 3: Soroban RPC data');
   if (sorobanData) {
-    console.log('Found Soroban RPC data:', sorobanData);
     
     try {
       if (sorobanData.createContractResult?.contractId) {
-        console.log('✅ METHOD 3 SUCCESS - Contract ID from creation result:', sorobanData.createContractResult.contractId);
         return sorobanData.createContractResult.contractId;
       }
 
       if (sorobanData.results && sorobanData.results[operationIndex]) {
         const opResult = sorobanData.results[operationIndex];
-        console.log(`Operation ${operationIndex} result:`, opResult);
         
         if (opResult.contractId) {
-          console.log('✅ METHOD 3 SUCCESS - Contract ID from operation result:', opResult.contractId);
           return opResult.contractId;
         }
         if (opResult.contractAddress && opResult.contractAddress.startsWith('C')) {
-          console.log('✅ METHOD 3 SUCCESS - Contract address from operation result:', opResult.contractAddress);
           return opResult.contractAddress;
         }
       }
     } catch (rpcError) {
-      console.log('❌ METHOD 3 FAILED:', rpcError.message);
     }
   }
 
   // Method 4: Transaction envelope XDR extraction
-  console.log('🔍 METHOD 4: Transaction envelope XDR extraction');
 
   try {
     if (!envelopeXdr) {
-      console.log('❌ No envelope XDR provided');
       throw new Error('No envelope XDR available');
     }
-
-    console.log('Decoding transaction envelope XDR...');
     const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(envelopeXdr, 'base64');
 
     let transaction;
     if (envelope.switch() === StellarSdk.xdr.EnvelopeType.envelopeTypeTx()) {
       transaction = envelope.v1().tx();
-      console.log('Using v1 transaction');
     } else if (envelope.switch() === StellarSdk.xdr.EnvelopeType.envelopeTypeTxV0()) {
       transaction = envelope.v0().tx();
-      console.log('Using v0 transaction');
     } else {
-      console.log('❌ Unsupported envelope type:', envelope.switch().name);
       throw new Error('Unsupported envelope type');
     }
 
     const operations = transaction.operations();
-    console.log(`Found ${operations.length} operations in envelope`);
 
     if (operations && operations[operationIndex]) {
       const op = operations[operationIndex];
-      console.log(`Processing operation ${operationIndex} from envelope`);
 
       if (op.body().switch() === StellarSdk.xdr.OperationType.invokeHostFunction()) {
-        console.log('✅ Found invoke_host_function operation in envelope');
         const invokeHostFunctionOp = op.body().invokeHostFunctionOp();
         const hostFunc = invokeHostFunctionOp.hostFunction();
 
-        console.log('Host function type:', hostFunc.switch().name);
-
         if (hostFunc.switch() === StellarSdk.xdr.HostFunctionType.hostFunctionTypeInvokeContract()) {
-          console.log('✅ Found invoke contract in host function');
           const invokeContract = hostFunc.invokeContract();
           const contractAddress = invokeContract.contractAddress();
-
-          console.log('Contract address type:', contractAddress.switch().name);
 
           if (contractAddress.switch() === StellarSdk.xdr.ScAddressType.scAddressTypeContract()) {
             const contractId = contractAddress.contractId();
             const contractIdStr = StellarSdk.StrKey.encodeContract(contractId);
-            console.log('✅✅✅ METHOD 4 SUCCESS - Contract ID from transaction envelope:', contractIdStr);
             return contractIdStr;
           } else {
-            console.log('⚠️ Contract address is not a contract type, might be an account address');
           }
         } else {
-          console.log('⚠️ Host function is not invokeContract type:', hostFunc.switch().name);
         }
       } else {
-        console.log('❌ Operation is not invoke_host_function type');
       }
     } else {
-      console.log(`❌ Operation index ${operationIndex} not found in envelope (total: ${operations.length})`);
     }
   } catch (xdrError) {
-    console.log('❌ METHOD 4 FAILED:', xdrError.message);
   }
-
-  console.log('❌ ALL METHODS FAILED - Could not extract contract ID from operation');
-  console.log('📊 SUMMARY: All extraction methods failed for this operation');
   
   if (!networkConfig.isTestnet) {
-    console.log('MAINNET: Contract ID extraction failed');
     return `Mainnet_Contract_Op${operationIndex + 1}`;
   }
   
@@ -1407,7 +1179,6 @@ const findContractIdInObject = (obj: any, visited = new Set()): string | null =>
     for (const field of contractFields) {
       if (obj[field] && typeof obj[field] === 'string' && 
           /^C[A-Z2-7]{55,62}$/.test(obj[field])) {
-        console.log(`🔍 Found contract ID in field '${field}':`, obj[field]);
         return obj[field];
       }
     }
@@ -1432,7 +1203,7 @@ const findContractIdInObject = (obj: any, visited = new Set()): string | null =>
   return null;
 };
 
-const extractFunctionDetails = (operation: any, sorobanData: any, operationIndex: number, tx?: any) => {
+const extractFunctionDetails = (operation: any, sorobanData: any, operationIndex: number, tx?: any, knownContractId?: string) => {
   const details: any = {
     functionName: 'invoke',
     args: [],
@@ -1451,7 +1222,8 @@ const extractFunctionDetails = (operation: any, sorobanData: any, operationIndex
       if (sorobanData.results && sorobanData.results[operationIndex]) {
         const opResult = sorobanData.results[operationIndex];
         details.result = opResult.result;
-        details.events = opResult.events || [];
+        // DON'T use opResult.events - we get events from diagnosticEventsXdr instead
+        // details.events = opResult.events || [];
       }
 
       if (sorobanData.auth && sorobanData.auth[operationIndex]) {
@@ -1460,9 +1232,6 @@ const extractFunctionDetails = (operation: any, sorobanData: any, operationIndex
 
       // Extract diagnostic events from XDR if available
       if (sorobanData.diagnosticEventsXdr) {
-        console.log('🔍 Found diagnosticEventsXdr in Soroban RPC response');
-        console.log('🔍 diagnosticEventsXdr type:', typeof sorobanData.diagnosticEventsXdr);
-        console.log('🔍 diagnosticEventsXdr value:', sorobanData.diagnosticEventsXdr);
 
         try {
           // diagnosticEventsXdr is an array of base64 XDR strings, one per event
@@ -1470,18 +1239,14 @@ const extractFunctionDetails = (operation: any, sorobanData: any, operationIndex
             ? sorobanData.diagnosticEventsXdr
             : [sorobanData.diagnosticEventsXdr];
 
-          console.log(`🔍 Processing ${eventsXdrArray.length} diagnostic event XDR strings`);
-
           eventsXdrArray.forEach((eventXdr: string, idx: number) => {
             try {
-              console.log(`🔍 Parsing diagnostic event ${idx + 1}/${eventsXdrArray.length}`);
               const diagnosticEvent = StellarSdk.xdr.DiagnosticEvent.fromXDR(eventXdr, 'base64');
-              console.log(`✅ Parsed diagnostic event ${idx + 1}:`, diagnosticEvent);
 
               const event = diagnosticEvent.event();
               const contractIdHash = event.contractId ? event.contractId() : null;
               const contractId = contractIdHash ?
-                StellarSdk.StrKey.encodeContract(contractIdHash) : 'System';
+                StellarSdk.StrKey.encodeContract(Buffer.from(Array.from(contractIdHash as any))) : (knownContractId || 'Unknown');
 
               const topics = event.body().v0().topics().map((topic: any) => {
                 try {
@@ -1513,30 +1278,19 @@ const extractFunctionDetails = (operation: any, sorobanData: any, operationIndex
                 data: eventData,
                 inSuccessfulContractCall: diagnosticEvent.inSuccessfulContractCall()
               });
-
-              console.log(`  ✅ Event ${idx + 1} extracted:`, {
-                contractId,
-                topicsCount: topics.length,
-                inSuccessfulContractCall: diagnosticEvent.inSuccessfulContractCall()
-              });
             } catch (err) {
-              console.warn(`❌ Failed to parse diagnostic event ${idx}:`, err);
             }
           });
-          console.log(`✅ Extracted ${details.events.length} events from diagnosticEventsXdr`);
         } catch (xdrError) {
-          console.warn('❌ Failed to parse diagnosticEventsXdr:', xdrError);
         }
       }
     } catch (error) {
-      console.warn('Error extracting function details from RPC:', error);
     }
   }
 
   // Try to extract from operation.function field (Horizon provides this)
   if (operation.function) {
     details.functionName = operation.function;
-    console.log('✅ Extracted function name from operation.function:', operation.function);
   }
 
   // Try to extract from XDR
@@ -1555,17 +1309,12 @@ const extractFunctionDetails = (operation: any, sorobanData: any, operationIndex
           try {
             return decodeScVal(arg);
           } catch (e) {
-            console.warn('Failed to decode arg, using toString:', e);
             return arg.toString();
           }
         });
-
-        console.log('✅ Extracted function name from XDR:', functionName);
-        console.log('✅ Decoded arguments:', details.args);
       }
     }
   } catch (error) {
-    console.warn('Error extracting function details from XDR:', error);
   }
 
   // Parse parameters if available (only if XDR extraction didn't work)
@@ -1576,63 +1325,34 @@ const extractFunctionDetails = (operation: any, sorobanData: any, operationIndex
           // Decode base64 XDR value to ScVal
           const scVal = StellarSdk.xdr.ScVal.fromXDR(param.value, 'base64');
           const decoded = decodeScVal(scVal);
-          console.log(`  Parameter ${param.type}:`, decoded);
           return decoded;
         } catch (e) {
-          console.warn(`  Could not decode parameter ${param.type}:`, e);
           return {
             type: param.type,
             value: param.value
           };
         }
       });
-      console.log(`✅ Extracted and decoded ${details.args.length} parameters from operation`);
     } catch (error) {
-      console.warn('Error extracting parameters:', error);
     }
   }
 
   // Extract diagnostic events and state changes from transaction meta
-  console.log('🔍 Checking for tx and result_meta_xdr...', {
-    hasTx: !!tx,
-    hasResultMetaXdr: !!(tx && tx.result_meta_xdr),
-    txKeys: tx ? Object.keys(tx).slice(0, 10) : []
-  });
 
   if (tx && tx.result_meta_xdr) {
     try {
-      console.log('🔍 Extracting meta details for operation', operationIndex);
-      console.log('🔍 tx.result_meta_xdr length:', tx.result_meta_xdr.length);
       const meta = StellarSdk.xdr.TransactionMeta.fromXDR(tx.result_meta_xdr, 'base64');
-      console.log('✅ Parsed TransactionMeta from XDR');
       const metaSwitch = meta.switch();
-      console.log('🔍 Meta type:', metaSwitch && typeof metaSwitch === 'object' && (metaSwitch as any).name ? (metaSwitch as any).name : metaSwitch);
-      const metaDetails = extractMetaDetails(meta, operationIndex);
-      console.log('📊 metaDetails extracted:', metaDetails);
-      console.log('📊 metaDetails.stateChanges count:', metaDetails.stateChanges?.length);
-      console.log('📊 metaDetails.stateChanges:', metaDetails.stateChanges);
-      console.log('📊 metaDetails.ttlExtensions:', metaDetails.ttlExtensions);
-      details.events = [...details.events, ...metaDetails.events];
+      const metaDetails = extractMetaDetails(meta, operationIndex, knownContractId);
+      // DON'T append metaDetails.events - we already extracted them from diagnosticEventsXdr above
+      // details.events = [...details.events, ...metaDetails.events];
       details.stateChanges = metaDetails.stateChanges;
-      console.log('📊 After assignment, details.stateChanges count:', details.stateChanges?.length);
       details.ttlExtensions = metaDetails.ttlExtensions;
       details.resourceUsage = metaDetails.resourceUsage;
       details.crossContractCalls = metaDetails.crossContractCalls;
-      console.log('✅ Meta details extracted:', {
-        events: details.events.length,
-        stateChanges: details.stateChanges.length,
-        ttlExtensions: details.ttlExtensions.length,
-        resourceUsage: details.resourceUsage,
-        crossContractCalls: details.crossContractCalls?.length || 0
-      });
     } catch (error) {
-      console.warn('❌ Error extracting meta details:', error);
-      console.error('Full error:', error);
     }
   } else {
-    console.warn('⚠️ No tx or result_meta_xdr available for meta extraction');
-    console.log('🔍 tx exists:', !!tx);
-    console.log('🔍 tx.result_meta_xdr exists:', !!(tx && tx.result_meta_xdr));
   }
 
   return details;
@@ -1660,18 +1380,14 @@ const extractSingleEntryData = (ledgerEntry: any) => {
     try {
       // Check if this is a LedgerKeyContractInstance by inspecting the XDR type
       const keyType = keyScVal.switch?.()?.name || keyScVal._switch?.name;
-      console.log(`  🔑 Key type: ${keyType}`);
 
       if (keyType === 'scvLedgerKeyContractInstance') {
         decodedKey = 'ContractInstance';
         isLedgerKeyContractInstance = true;
-        console.log('  ✅ Detected LedgerKeyContractInstance');
       } else {
         decodedKey = decodeScVal(keyScVal);
-        console.log(`  🔑 Decoded key:`, decodedKey);
       }
     } catch (e) {
-      console.warn('  ⚠️ Error decoding key:', e);
       decodedKey = decodeScVal(keyScVal);
     }
 
@@ -1695,11 +1411,11 @@ const extractSingleEntryData = (ledgerEntry: any) => {
         const bytes = serializedBufferToUint8Array(k);
         if (bytes.length === 32) {
           try {
-            const addr = StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+            const addr = StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(bytes));
             return `"${addr.substring(0, 4)}…${addr.substring(addr.length - 4)}"`;
           } catch {
             try {
-              const addr = StellarSdk.StrKey.encodeContract(bytes);
+              const addr = StellarSdk.StrKey.encodeContract(Buffer.from(bytes));
               return `"${addr.substring(0, 6)}…${addr.substring(addr.length - 6)}"`;
             } catch {
               const hex = Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join('');
@@ -1803,7 +1519,6 @@ const extractLedgerEntryData = (change: any, changeType: string) => {
     } else if (changeType === 'ledgerEntryRemoved') {
       ledgerEntry = change.removed();
     } else {
-      console.warn(`Unknown change type: ${changeType}`);
     }
 
     if (!ledgerEntry) return null;
@@ -1821,12 +1536,11 @@ const extractLedgerEntryData = (change: any, changeType: string) => {
 
     return entryInfo;
   } catch (err) {
-    console.warn('Error extracting ledger entry data:', err);
     return null;
   }
 };
 
-const extractMetaDetails = (meta: any, operationIndex: number) => {
+const extractMetaDetails = (meta: any, operationIndex: number, knownContractId?: string) => {
   const details: any = {
     events: [] as any[],
     stateChanges: [] as any[],
@@ -1842,22 +1556,16 @@ const extractMetaDetails = (meta: any, operationIndex: number) => {
   };
 
   try {
-    console.log('🔍 Meta object type:', typeof meta);
-    console.log('🔍 Meta object:', meta);
     const metaSwitch = meta.switch();
-    console.log('🔍 Meta switch object:', metaSwitch);
-    console.log('🔍 Meta switch type:', typeof metaSwitch);
 
     // Handle different switch return types
     let switchValue = metaSwitch;
     if (typeof metaSwitch === 'object' && metaSwitch !== null) {
-      console.log('🔍 Meta switch properties:', Object.keys(metaSwitch));
       switchValue = metaSwitch.value !== undefined ? metaSwitch.value : metaSwitch;
     }
 
     // The switch might return a number directly
     const metaVersion = typeof switchValue === 'number' ? switchValue : (metaSwitch as any).value;
-    console.log('📊 Transaction meta version:', metaVersion);
 
     // Extract from v3 or v4 meta (Soroban transactions)
     // v4 is the newer format but has same structure as v3
@@ -1865,29 +1573,22 @@ const extractMetaDetails = (meta: any, operationIndex: number) => {
     const isV4 = metaVersion === 4;
 
     if (isV3 || isV4) {
-      console.log(`✅ Found Soroban transaction (v${metaVersion} meta)`);
       const v3 = isV4 ? meta.v4() : meta.v3();
 
       // FIRST: Extract ledger entry changes from v3.operations() - this is where the actual state changes are!
-      console.log('🔍 Extracting ledger entry changes from v3.operations()...');
       try {
         if (v3.operations && v3.operations()) {
           const operations = v3.operations();
-          console.log(`  Found ${operations.length} operations in v3`);
 
           if (operations[operationIndex]) {
             const operation = operations[operationIndex];
-            console.log(`  Processing operation ${operationIndex}`);
-            console.log(`  Operation type:`, typeof operation);
 
             if (operation.changes && operation.changes()) {
               const changes = operation.changes();
-              console.log(`  ✅ Found ${changes.length} ledger entry changes for operation ${operationIndex}`);
 
               changes.forEach((change: any, idx: number) => {
                 try {
                   const changeType = change.switch().name;
-                  console.log(`    Change ${idx}: ${changeType}`);
                   const ledgerEntry = extractLedgerEntryData(change, changeType);
 
                   if (ledgerEntry) {
@@ -1921,34 +1622,19 @@ const extractMetaDetails = (meta: any, operationIndex: number) => {
                     }
 
                     details.stateChanges.push(stateChange);
-
-                    console.log(`    ✅ Added state change: ${actionType} ${ledgerEntry.storageType} ${ledgerEntry.keyDisplay}`);
-                    console.log(`    📊 Total state changes now: ${details.stateChanges.length}`);
                   }
                 } catch (err) {
-                  console.warn(`    ❌ Error extracting change ${idx}:`, err);
                 }
               });
             } else {
-              console.log(`  ⚠️ No changes() method on operation ${operationIndex}`);
             }
           } else {
-            console.log(`  ⚠️ Operation ${operationIndex} not found in operations array`);
           }
         } else {
-          console.log('  ⚠️ No operations() method on v3');
         }
       } catch (err) {
-        console.error('  ❌ Error accessing v3.operations():', err);
       }
-
-      console.log(`📊 Extracted ${details.stateChanges.length} state changes from v3.operations()`);
       if (details.stateChanges.length > 0) {
-        console.log('📋 State changes summary:', details.stateChanges.map(sc => ({
-          type: sc.type,
-          storageType: sc.storageType,
-          keyDisplay: sc.keyDisplay
-        })));
       }
 
       // Extract Soroban metadata with resource usage
@@ -1957,7 +1643,6 @@ const extractMetaDetails = (meta: any, operationIndex: number) => {
 
         // Extract resource usage
         try {
-          console.log('💰 Extracting resource usage...');
           if (sorobanMeta.ext && sorobanMeta.ext().v1) {
             const v1Ext = sorobanMeta.ext().v1();
             const resources: any = {
@@ -1969,24 +1654,18 @@ const extractMetaDetails = (meta: any, operationIndex: number) => {
             // Extract resource fees
             if (v1Ext.totalNonRefundableResourceFeeCharged) {
               resources.nonRefundableFee = Number(v1Ext.totalNonRefundableResourceFeeCharged());
-              console.log('  Non-refundable fee:', resources.nonRefundableFee);
             }
             if (v1Ext.totalRefundableResourceFeeCharged) {
               resources.refundableFee = Number(v1Ext.totalRefundableResourceFeeCharged());
-              console.log('  Refundable fee:', resources.refundableFee);
             }
 
             details.resourceUsage = resources;
-            console.log('✅ Resource usage extracted:', resources);
           } else {
-            console.warn('  No v1 extension found in soroban meta');
           }
         } catch (err) {
-          console.warn('Error extracting resource usage:', err);
         }
 
         // Extract storage data from ledger entry changes
-        console.log('💾 Extracting storage data from soroban meta...');
         try {
           // Get transaction operations to determine host function type
           if (v3.txResult && v3.txResult()) {
@@ -2005,13 +1684,11 @@ const extractMetaDetails = (meta: any, operationIndex: number) => {
                 if (opType === 'invokeHostFunction') {
                   const invokeResult = opResult.tr().invokeHostFunctionResult();
                   details.hostFunctionType = invokeResult.switch().name;
-                  console.log('  Host function type:', details.hostFunctionType);
                 }
               }
             }
           }
         } catch (err) {
-          console.warn('  Could not extract host function type:', err);
         }
 
         // Parse storage from soroban return value and events
@@ -2019,47 +1696,35 @@ const extractMetaDetails = (meta: any, operationIndex: number) => {
           try {
             const returnVal = sorobanMeta.returnValue();
             const decodedReturn = decodeScVal(returnVal);
-            console.log('  Return value (decoded):', decodedReturn);
 
             // If return value is a map/object, treat as storage
             if (typeof decodedReturn === 'object' && !Array.isArray(decodedReturn)) {
               details.instanceStorage = { ...details.instanceStorage, ...decodedReturn };
             }
           } catch (err) {
-            console.warn('  Could not decode return value:', err);
           }
         }
 
 
         // Extract TTL extensions (always check and add if present)
         try {
-          console.log('⏱️ Checking for TTL extensions...');
           if (sorobanMeta.ext && sorobanMeta.ext().v1) {
             const ext = sorobanMeta.ext().v1();
             if (ext.ext && ext.ext().v1) {
               details.ttlExtensions.push({
                 description: 'Time-to-live extended for contract state entries'
               });
-              console.log('✅ TTL extension added');
             }
           }
         } catch (err) {
-          console.warn('Error extracting TTL:', err);
         }
       } else {
-        console.warn('  No sorobanMeta found in v3');
       }
 
       // Extract diagnostic events with detailed data
-      console.log('🔍 Checking for diagnostic events...');
-      console.log('🔍 v3 object:', v3);
-      console.log('🔍 v3.diagnosticEvents exists:', typeof v3.diagnosticEvents);
-      console.log('🔍 v3.diagnosticEvents():', v3.diagnosticEvents ? v3.diagnosticEvents() : 'undefined');
 
       if (v3.diagnosticEvents && v3.diagnosticEvents()) {
         const events = v3.diagnosticEvents();
-        console.log(`📡 Found ${events.length} diagnostic events`);
-        console.log(`📡 Events array:`, events);
         events.forEach((diagnosticEvent: any, eventIdx: number) => {
           try {
             const event = diagnosticEvent.event();
@@ -2081,24 +1746,23 @@ const extractMetaDetails = (meta: any, operationIndex: number) => {
                     }
                   }
                 } catch (e) {
-                  console.warn('Could not decode topic:', e);
                 }
               });
             }
 
             // Determine contractId
-            // CRITICAL: For fn_call events, event.contractId() returns the EMITTING contract,
-            // but we need the CALLED contract which is in topics[1]
+            // The contract that emitted this event is the one we want
             let contractId: string;
 
-            if (topics.length > 1 && topics[0] === 'fn_call' && typeof topics[1] === 'string') {
-              // For fn_call events, ALWAYS use topics[1] (the contract being called)
-              contractId = topics[1];
-            } else if (event.contractId) {
-              // For other events, use event.contractId()
-              contractId = StellarSdk.StrKey.encodeContract(event.contractId());
-            } else {
-              contractId = 'System';
+            try {
+              if (event.contractId) {
+                const contractIdBytes = event.contractId();
+                contractId = StellarSdk.StrKey.encodeContract(contractIdBytes);
+              } else {
+                contractId = knownContractId || 'Unknown';
+              }
+            } catch (e) {
+              contractId = knownContractId || 'Unknown';
             }
 
             // Extract data payload
@@ -2111,7 +1775,6 @@ const extractMetaDetails = (meta: any, operationIndex: number) => {
                 }
               }
             } catch (e) {
-              console.warn('Could not extract event data:', e);
             }
 
             // Check first topic to identify event type
@@ -2123,7 +1786,6 @@ const extractMetaDetails = (meta: any, operationIndex: number) => {
             // Don't filter fn_call and fn_return - we need them for displaying contract calls!
             // Only skip generic diagnostic_event if needed
             if (eventType === 'diagnostic_event') {
-              console.log(`  Filtering out diagnostic event: ${eventType}`);
               return;
             }
 
@@ -2136,14 +1798,13 @@ const extractMetaDetails = (meta: any, operationIndex: number) => {
             };
 
             details.events.push(eventInfo);
-            console.log(`  Event ${eventIdx + 1}:`, eventInfo);
 
             // Detect cross-contract calls from diagnostic events
             // Diagnostic events show when a contract calls another contract
             // We can detect this by looking for events from different contracts in sequence
-            if (contractId !== 'System' && details.events.length > 1) {
+            if (contractId !== 'Unknown' && details.events.length > 1) {
               const prevEvent = details.events[details.events.length - 2];
-              if (prevEvent.contractId !== contractId && prevEvent.contractId !== 'System') {
+              if (prevEvent.contractId !== contractId && prevEvent.contractId !== 'Unknown') {
                 // Different contract emitted this event - likely a cross-contract call
                 const crossCall = {
                   fromContract: prevEvent.contractId,
@@ -2152,35 +1813,20 @@ const extractMetaDetails = (meta: any, operationIndex: number) => {
                   success: eventInfo.inSuccessfulContractCall
                 };
                 details.crossContractCalls.push(crossCall);
-                console.log(`  🔗 Detected cross-contract call:`, crossCall);
               }
             }
           } catch (err) {
-            console.warn('Error decoding event:', err);
           }
         });
-        console.log(`✅ Extracted ${details.events.length} events`);
-        console.log(`📊 All extracted events:`, details.events);
         if (details.crossContractCalls.length > 0) {
-          console.log(`🔗 Detected ${details.crossContractCalls.length} cross-contract calls`);
         }
       } else {
-        console.warn('⚠️ No diagnostic events found or v3.diagnosticEvents() returned empty');
-        console.log('🔍 v3 object keys:', Object.keys(v3));
-        console.log('🔍 v3._attributes:', v3._attributes);
       }
     } else {
-      console.warn('⚠️ Not a Soroban transaction (v3 meta not found)');
     }
   } catch (error) {
-    console.warn('Error extracting meta details:', error);
   }
-
-  console.log('📤 Returning meta details:', details);
-  console.log('📊 State changes count:', details.stateChanges.length);
-  console.log('📊 Events count:', details.events.length);
   if (details.stateChanges.length > 0) {
-    console.log('✅ First state change:', details.stateChanges[0]);
   }
   return details;
 };
@@ -2198,18 +1844,15 @@ const decodeTransactionXdr = async (tx: any) => {
     let innerEnvelope = null;
     if (tx.envelope_xdr) {
       try {
-        console.log('🔍 Decoding envelope_xdr...');
         const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(tx.envelope_xdr, 'base64');
         debugInfo.decodedEnvelope = envelope;
 
         // Check if this is a fee bump transaction
         const envelopeType = envelope.switch()?.name || String(envelope.switch());
-        console.log('📨 Envelope type:', envelopeType);
         debugInfo.envelopeType = envelopeType;
 
         if (envelopeType === 'envelopeTypeTxFeeBump' || envelopeType === 'envelopeTypeFeeBump') {
           isFeeBump = true;
-          console.log('💰 Fee bump transaction detected');
           try {
             const feeBumpTx = envelope.feeBump();
             innerEnvelope = feeBumpTx.tx().innerTx();
@@ -2217,39 +1860,30 @@ const decodeTransactionXdr = async (tx: any) => {
               feeSource: feeBumpTx.tx().feeSource().toString(),
               fee: feeBumpTx.tx().fee().toString()
             };
-            console.log('✅ Fee bump info extracted:', debugInfo.feeBumpInfo);
           } catch (e) {
-            console.warn('⚠️ Could not extract fee bump details:', e);
           }
         }
       } catch (error) {
-        console.warn('❌ Failed to decode envelope XDR:', error);
       }
     }
 
     // Decode result XDR for error analysis
     if (tx.result_xdr) {
       try {
-        console.log('🔍 Decoding result_xdr for transaction...');
         const transactionResult = StellarSdk.xdr.TransactionResult.fromXDR(tx.result_xdr, 'base64');
         debugInfo.decodedResult = transactionResult;
 
         const errorAnalysis = analyzeTransactionErrors(transactionResult, isFeeBump);
-        console.log('🔍 Error analysis result:', errorAnalysis);
         if (errorAnalysis && (errorAnalysis.outerError || errorAnalysis.innerError || errorAnalysis.operationErrors?.length > 0)) {
           debugInfo.errorAnalysis = errorAnalysis;
-          console.log('✅ Error analysis attached to debugInfo');
         } else {
-          console.log('ℹ️ No errors found in transaction');
         }
       } catch (error) {
-        console.warn('❌ Failed to decode result XDR:', error);
       }
     }
 
     return debugInfo;
   } catch (error) {
-    console.warn('Failed to decode transaction XDR:', error);
     return null;
   }
 };
@@ -2267,8 +1901,6 @@ const analyzeTransactionErrors = (transactionResult: any, isFeeBump: boolean = f
     const resultSwitch = transactionResult.result().switch();
     const resultName = (resultSwitch as any).name || String(resultSwitch);
 
-    console.log('🔍 Transaction result code:', resultName);
-
     // Handle fee bump transactions
     if (isFeeBump) {
       analysis.layers.push({
@@ -2283,7 +1915,6 @@ const analyzeTransactionErrors = (transactionResult: any, isFeeBump: boolean = f
 
       if (resultName === 'txFeeBumpInnerFailed') {
         analysis.outerError = resultName;
-        console.log('💰 Fee bump succeeded, but inner transaction failed');
 
         // Try to get inner transaction result
         try {
@@ -2299,10 +1930,8 @@ const analyzeTransactionErrors = (transactionResult: any, isFeeBump: boolean = f
               envelopeType: 'envelopeTypeTx',
               explanation: 'The actual transaction that was wrapped by the fee bump. This is where the real failure occurred.'
             });
-            console.log('🔍 Inner transaction error:', innerResultName);
           }
         } catch (e) {
-          console.warn('⚠️ Could not extract inner result:', e);
         }
       } else if (resultName !== 'txFeeBumpInnerSuccess') {
         analysis.outerError = resultName;
@@ -2318,7 +1947,6 @@ const analyzeTransactionErrors = (transactionResult: any, isFeeBump: boolean = f
           envelopeType: 'envelopeTypeTx',
           explanation: 'The transaction envelope that contains the operations.'
         });
-        console.log('🔍 Transaction-level error detected:', resultName);
       }
     }
 
@@ -2328,31 +1956,21 @@ const analyzeTransactionErrors = (transactionResult: any, isFeeBump: boolean = f
     try {
       if (isFeeBump && resultName === 'txFeeBumpInnerFailed') {
         // Extract operation results from inner transaction
-        console.log('🔍 Attempting to extract inner transaction results...');
         try {
           const result = transactionResult.result();
-          console.log('🔍 Transaction result object:', result);
-          console.log('🔍 Result keys:', Object.keys(result));
-          console.log('🔍 Result methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(result)));
 
           const innerPair = result.innerResultPair();
-          console.log('🔍 Inner result pair:', innerPair);
 
           if (innerPair) {
             const innerResult = innerPair.result();
-            console.log('🔍 Inner result:', innerResult);
 
             if (innerResult) {
               const innerResultObj = innerResult.result();
-              console.log('🔍 Inner result object:', innerResultObj);
 
               opResults = innerResultObj.results();
-              console.log('✅ Extracted operation results from inner transaction:', opResults);
             }
           }
         } catch (e) {
-          console.warn('⚠️ Could not extract inner operation results:', e);
-          console.warn('⚠️ Error details:', e instanceof Error ? e.message : String(e));
         }
       } else {
         // Regular transaction or successful fee bump
@@ -2361,10 +1979,6 @@ const analyzeTransactionErrors = (transactionResult: any, isFeeBump: boolean = f
       if (opResults && opResults.length > 0) {
         opResults.forEach((opResult: any, index: number) => {
           try {
-            console.log(`🔍 Raw opResult for operation ${index}:`, opResult);
-            console.log(`🔍 opResult keys:`, Object.keys(opResult));
-            console.log(`🔍 opResult._switch:`, opResult._switch);
-            console.log(`🔍 opResult._arm:`, opResult._arm);
 
             // Try to get the operation result code
             let codeType: string | undefined;
@@ -2373,25 +1987,19 @@ const analyzeTransactionErrors = (transactionResult: any, isFeeBump: boolean = f
             if (typeof opResult.switch === 'function') {
               const sw = opResult.switch();
               codeType = (sw as any).name || String(sw);
-              console.log(`✅ Method 1 (switch()): ${codeType}`);
             }
             // Method 2: Try ._switch.name
             else if (opResult._switch?.name) {
               codeType = opResult._switch.name;
-              console.log(`✅ Method 2 (_switch.name): ${codeType}`);
             }
             // Method 3: Try ._arm
             else if (opResult._arm) {
               codeType = opResult._arm;
-              console.log(`✅ Method 3 (_arm): ${codeType}`);
             }
 
             if (!codeType) {
-              console.warn(`⚠️ Could not determine code type for operation ${index}`);
               codeType = 'unknown';
             }
-
-            console.log(`Operation ${index} code type: ${codeType}`);
 
         if (codeType !== 'opInner' && codeType !== 'unknown') {
           // Operation failed at the envelope level (e.g., opBadAuth, opNoSourceAccount)
@@ -2404,8 +2012,6 @@ const analyzeTransactionErrors = (transactionResult: any, isFeeBump: boolean = f
           // Operation succeeded at envelope level, check the inner result
           try {
             const tr = opResult.tr();
-            console.log(`🔍 tr object:`, tr);
-            console.log(`🔍 tr keys:`, Object.keys(tr));
 
             // Try different operation types based on the reference code pattern
             let operationResult;
@@ -2455,12 +2061,8 @@ const analyzeTransactionErrors = (transactionResult: any, isFeeBump: boolean = f
               // Try to get operation type from switch
               const trSwitch = tr.switch();
               operationType = (trSwitch as any).name || String(trSwitch);
-              console.warn(`⚠️ Unknown operation type: ${operationType}`);
               return;
             }
-
-            console.log(`✅ Operation ${index} type: ${operationType}`);
-            console.log(`🔍 Operation result:`, operationResult);
 
             // Get the result code from the operation result
             let resultCode;
@@ -2473,11 +2075,8 @@ const analyzeTransactionErrors = (transactionResult: any, isFeeBump: boolean = f
               resultCode = operationResult._arm;
             }
 
-            console.log(`✅ Operation ${index} result code: ${resultCode}`);
-
             // Check if it's a success code (ends with "Success")
             if (resultCode && !resultCode.endsWith('Success')) {
-              console.log(`❌ Operation ${index} failed with: ${resultCode}`);
               const errorInfo = {
                 operation: index,
                 error: resultCode,
@@ -2494,24 +2093,19 @@ const analyzeTransactionErrors = (transactionResult: any, isFeeBump: boolean = f
                 explanation: `The ${operationType} operation failed with a specific error code.`
               });
             } else {
-              console.log(`✅ Operation ${index} succeeded`);
             }
           } catch (e) {
-            console.warn(`Could not parse inner result for operation ${index}:`, e);
           }
         }
           } catch (opError) {
-            console.warn(`Error processing operation ${index}:`, opError);
           }
         });
       }
     } catch (resultsError) {
-      console.log('🔍 No operation results available (transaction-level failure)');
     }
 
     return analysis;
   } catch (error) {
-    console.warn('Error analyzing transaction errors:', error);
     return null;
   }
 };
@@ -2654,14 +2248,11 @@ const getOperationErrorDescription = (errorCode: string): string => {
 };
 
 export const createOperationNodes = (transaction: TransactionDetails): Node[] => {
-  console.log(`🎨 Creating nodes for ${transaction.operations.length} operations`);
 
   // Filter out core_metrics operations - these are internal Horizon operations, not real transaction operations
   const validOperations = transaction.operations.filter(op =>
     op.type !== 'core_metrics' && op.type !== 'coreMetrics' && op.type !== 'core-metrics'
   );
-
-  console.log(`📊 Filtered to ${validOperations.length} valid operations (removed ${transaction.operations.length - validOperations.length} internal operations)`);
 
   const allNodes: Node[] = [];
   let globalNodeIndex = 0;
@@ -2669,20 +2260,7 @@ export const createOperationNodes = (transaction: TransactionDetails): Node[] =>
   validOperations.forEach((op, index) => {
     const sorobanOp = transaction.sorobanOperations?.find((sop, idx) => idx === index);
 
-    console.log(`🔍 Creating node ${index + 1}/${validOperations.length}:`, {
-      type: op.type,
-      id: op.id,
-      hasSorobanOp: !!sorobanOp,
-      sorobanOpIndex: transaction.sorobanOperations?.findIndex((sop, idx) => idx === index),
-      totalSorobanOps: transaction.sorobanOperations?.length,
-      resourceUsage: sorobanOp?.resourceUsage,
-      stateChanges: sorobanOp?.stateChanges?.length,
-      events: sorobanOp?.events?.length
-    });
-
     if (!sorobanOp && transaction.sorobanOperations && transaction.sorobanOperations.length > 0) {
-      console.warn(`⚠️ No sorobanOp found for operation ${index}, but ${transaction.sorobanOperations.length} soroban operations exist`);
-      console.log(`Available soroban operations:`, transaction.sorobanOperations);
     }
 
     const operationNode: Node = {
@@ -2726,13 +2304,6 @@ export const createOperationNodes = (transaction: TransactionDetails): Node[] =>
       : transaction.events?.filter(e => e.contractId === sorobanOp?.contractId) || [];
 
     if (operationEvents.length > 0) {
-      console.log(`📢 Creating ${operationEvents.length} event nodes for operation ${index}`);
-      console.log(`📊 SorobanOp data:`, {
-        stateChangesCount: sorobanOp?.stateChanges?.length || 0,
-        ttlExtensionsCount: sorobanOp?.ttlExtensions?.length || 0,
-        stateChanges: sorobanOp?.stateChanges,
-        ttlExtensions: sorobanOp?.ttlExtensions
-      });
 
       operationEvents.forEach((event, eventIdx) => {
         // Skip core_metrics events
@@ -2746,8 +2317,6 @@ export const createOperationNodes = (transaction: TransactionDetails): Node[] =>
 
         // Validate event has required data
         if (event && (event.topics?.length > 0 || event.data?.length > 0)) {
-          console.log(`🔍 Creating event node ${eventIdx}, sorobanOp.stateChanges:`, sorobanOp.stateChanges);
-          console.log(`🔍 stateChanges array length:`, sorobanOp.stateChanges?.length);
 
           const eventNode: Node = {
             id: `event-${index}-${eventIdx}`,
@@ -2778,13 +2347,11 @@ export const createOperationNodes = (transaction: TransactionDetails): Node[] =>
           allNodes.push(eventNode);
           globalNodeIndex++;
         } else {
-          console.warn(`Skipping invalid event at index ${eventIdx}:`, event);
         }
       });
     }
 
     if (sorobanOp?.stateChanges && sorobanOp.stateChanges.length > 0) {
-      console.log(`📝 Creating ${sorobanOp.stateChanges.length} state change nodes for operation ${index}`);
 
       sorobanOp.stateChanges.forEach((stateChange, changeIdx) => {
         const stateChangeNode: Node = {
@@ -2810,7 +2377,6 @@ export const createOperationNodes = (transaction: TransactionDetails): Node[] =>
     });
 
     if (operationEffects && operationEffects.length > 0) {
-      console.log(`💫 Creating ${operationEffects.length} effect nodes for operation ${index}`);
 
       operationEffects.forEach((effect, effectIdx) => {
         const effectNode: Node = {
@@ -2830,8 +2396,6 @@ export const createOperationNodes = (transaction: TransactionDetails): Node[] =>
     }
     */ // End of disabled event/state/effect node creation
   });
-
-  console.log(`✅ Successfully created ${allNodes.length} total nodes (operations + events + state changes + effects)`);
   return allNodes;
 };
 
@@ -3008,42 +2572,10 @@ export const createOperationEdges = (transaction: TransactionDetails): Edge[] =>
       });
     }
   });
-
-  console.log('🔗 Created edges:', edges.length, 'total');
   return edges;
 };
 
-export const simulateTransaction = async (hash: string): Promise<SimulationResult> => {
-  console.log('🧪 Simulating transaction:', hash);
-  
-  try {
-    // For now, return a basic simulation result
-    // In a real implementation, this would use Soroban RPC to simulate the transaction
-    return {
-      success: true,
-      estimatedFee: '100',
-      potentialErrors: [],
-      resourceUsage: {
-        cpuUsage: 1000,
-        memoryUsage: 512
-      }
-    };
-  } catch (error: any) {
-    console.error('❌ Simulation error:', error);
-    return {
-      success: false,
-      estimatedFee: '0',
-      potentialErrors: [error.message || 'Simulation failed'],
-      resourceUsage: {
-        cpuUsage: 0,
-        memoryUsage: 0
-      }
-    };
-  }
-};
-
 export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: any) => {
-  console.log('🔬 Enhanced simulation with debugger for:', hash);
 
   try {
     const tx = horizonTx || await server.transactions().transaction(hash).call();
@@ -3061,9 +2593,7 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
       try {
         const transactionResult = StellarSdk.xdr.TransactionResult.fromXDR(tx.result_xdr, 'base64');
         errorAnalysis = analyzeTransactionErrors(transactionResult);
-        console.log('📋 Error Analysis:', errorAnalysis);
       } catch (error) {
-        console.warn('Failed to decode result XDR:', error);
       }
     }
 
@@ -3076,13 +2606,10 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
     if (hasSorobanOps) {
       try {
         sorobanData = await querySorobanRpc(hash);
-        console.log('✅ Got Soroban RPC data:', sorobanData);
 
         // Extract actual consumed resources directly from RPC response
         // Stellar RPC returns CPU and memory in the transaction result
         if (sorobanData) {
-          console.log('🔍 Checking sorobanData for resource fields...');
-          console.log('🔍 sorobanData keys:', Object.keys(sorobanData));
 
           // Check for direct CPU/memory fields
           const possibleCpuFields = ['cpuInsns', 'cpu_instructions', 'totalCpuInsns'];
@@ -3090,13 +2617,11 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
 
           for (const field of possibleCpuFields) {
             if (sorobanData[field] !== undefined) {
-              console.log(`✅ Found CPU in sorobanData.${field}:`, sorobanData[field]);
             }
           }
 
           for (const field of possibleMemFields) {
             if (sorobanData[field] !== undefined) {
-              console.log(`✅ Found Memory in sorobanData.${field}:`, sorobanData[field]);
             }
           }
         }
@@ -3104,7 +2629,6 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
         // Try to simulate the transaction to get resource usage
         if (tx.envelope_xdr && tx.successful) {
           try {
-            console.log('🔄 Attempting to simulate transaction for resource data...');
             const transaction = StellarSdk.TransactionBuilder.fromXDR(tx.envelope_xdr, networkConfig.networkPassphrase) as StellarSdk.Transaction;
 
             // Use official Stellar RPC to simulate (free public endpoint)
@@ -3114,15 +2638,12 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
 
             const rpcServer = new StellarSdk.rpc.Server(rpcUrl, { allowHttp: false });
             const simResult = await rpcServer.simulateTransaction(transaction);
-            console.log('✅ Simulation result:', simResult);
 
             simulationData = simResult;
           } catch (simError: any) {
-            console.warn('⚠️ Could not simulate transaction:', simError.message);
           }
         }
       } catch (err) {
-        console.warn('⚠️ Could not fetch Soroban RPC data:', err);
       }
     }
 
@@ -3130,7 +2651,6 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
     // because the original transaction state may no longer exist
     let simulationDiagnostics: any = null;
     if (!tx.successful && hasSorobanOps) {
-      console.log('ℹ️ Failed Soroban transaction - diagnostic events not available in failed tx metadata');
       simulationDiagnostics = {
         note: 'Diagnostic events are only available for successful Soroban transactions. For failed transactions, the XDR error codes provide the failure reason.'
       };
@@ -3150,22 +2670,14 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
     };
 
     // First, try to get resource usage from envelope sorobanData (for historical transactions)
-    console.log('🔍 Checking envelope sorobanData availability:', {
-      has__envelopeSorobanData: !!(tx as any).__envelopeSorobanData,
-      cpuInstructions: realResourceUsage.cpuInstructions
-    });
 
     // Skip trying to extract actual from invoke result - we'll get it from metadata later
 
     // Always try to extract BUDGETED resources from envelope sorobanData
     if ((tx as any).__envelopeSorobanData) {
       try {
-        console.log('📊 Parsing envelope sorobanData for BUDGETED resources...');
         const sorobanData = StellarSdk.xdr.SorobanTransactionData.fromXDR((tx as any).__envelopeSorobanData, 'base64');
         const resources = sorobanData.resources();
-
-        console.log('🔍 Resources object keys:', Object.keys(resources));
-        console.log('🔍 Resources object methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(resources)));
 
         // Extract budgeted CPU instructions
         if (resources.instructions) {
@@ -3175,19 +2687,15 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
           // Only use as actual if we don't have actual values
           if (realResourceUsage.cpuInstructions === 0) {
             realResourceUsage.cpuInstructions = budgetedCpu;
-            console.log(`⚠️ CPU Instructions from envelope (BUDGETED, using as actual): ${realResourceUsage.cpuInstructions.toLocaleString()}`);
           } else {
-            console.log(`📊 BUDGETED CPU Instructions: ${budgetedCpu.toLocaleString()} (actual: ${realResourceUsage.cpuInstructions.toLocaleString()})`);
           }
         }
 
         if ((resources as any).readBytes) {
           realResourceUsage.readBytes = Number((resources as any).readBytes());
-          console.log(`✅ Read Bytes from envelope: ${realResourceUsage.readBytes.toLocaleString()}`);
         }
         if ((resources as any).writeBytes) {
           realResourceUsage.writeBytes = Number((resources as any).writeBytes());
-          console.log(`✅ Write Bytes from envelope: ${realResourceUsage.writeBytes.toLocaleString()}`);
         }
 
         // Try different field names for memory (budgeted)
@@ -3200,9 +2708,7 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
             // Only use as actual if we don't have actual values
             if (realResourceUsage.memoryBytes === 0) {
               realResourceUsage.memoryBytes = budgetedMem;
-              console.log(`⚠️ Memory from envelope (BUDGETED, ${field}, using as actual): ${realResourceUsage.memoryBytes.toLocaleString()}`);
             } else {
-              console.log(`📊 BUDGETED Memory (${field}): ${budgetedMem.toLocaleString()} bytes (actual: ${realResourceUsage.memoryBytes.toLocaleString()})`);
             }
             break;
           }
@@ -3211,71 +2717,47 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
         // If no budgeted memory but we have I/O bytes, calculate budgeted memory
         if (realResourceUsage.budgetedMemoryBytes === 0 && (realResourceUsage.readBytes > 0 || realResourceUsage.writeBytes > 0)) {
           realResourceUsage.budgetedMemoryBytes = realResourceUsage.readBytes + realResourceUsage.writeBytes;
-          console.log(`📊 BUDGETED Memory calculated from I/O: ${realResourceUsage.budgetedMemoryBytes.toLocaleString()} bytes`);
         }
 
         // If memory not found directly, use read+write bytes
         // In Soroban, memory usage for ledger operations = read + write bytes
         if (realResourceUsage.memoryBytes === 0 && (realResourceUsage.readBytes > 0 || realResourceUsage.writeBytes > 0)) {
           realResourceUsage.memoryBytes = realResourceUsage.readBytes + realResourceUsage.writeBytes;
-          console.log(`💡 Memory calculated from I/O: ${realResourceUsage.memoryBytes.toLocaleString()} bytes (${realResourceUsage.readBytes} read + ${realResourceUsage.writeBytes} write)`);
         }
         // Try to extract ledger entry counts
         if ((resources as any).readLedgerEntries) {
           realResourceUsage.readLedgerEntries = Number((resources as any).readLedgerEntries());
-          console.log(`✅ Read Ledger Entries (direct): ${realResourceUsage.readLedgerEntries}`);
         }
         if ((resources as any).writeLedgerEntries) {
           realResourceUsage.writeLedgerEntries = Number((resources as any).writeLedgerEntries());
-          console.log(`✅ Write Ledger Entries (direct): ${realResourceUsage.writeLedgerEntries}`);
         }
 
         // If not found directly, try to get from footprint in RESOURCES (not sorobanData)
         if (realResourceUsage.readLedgerEntries === 0 || realResourceUsage.writeLedgerEntries === 0) {
-          console.log('🔍 Entry counts are 0, trying to extract from resources.footprint()...');
-          console.log('🔍 resources type:', typeof resources);
-          console.log('🔍 resources.footprint type:', typeof (resources as any).footprint);
 
           try {
             // Get footprint from RESOURCES, not sorobanData!
             const footprint = (resources as any).footprint ? (resources as any).footprint() : null;
-            console.log('🔍 footprint result:', footprint);
-            console.log('🔍 footprint type:', typeof footprint);
 
             if (footprint) {
-              console.log('✅ Got footprint object from resources');
-              console.log('🔍 footprint.readOnly type:', typeof footprint.readOnly);
-              console.log('🔍 footprint.readWrite type:', typeof footprint.readWrite);
 
               const readOnly = footprint.readOnly ? footprint.readOnly() : [];
               const readWrite = footprint.readWrite ? footprint.readWrite() : [];
 
-              console.log(`🔍 readOnly length: ${readOnly.length}`);
-              console.log(`🔍 readWrite length: ${readWrite.length}`);
-
               if (realResourceUsage.readLedgerEntries === 0) {
                 realResourceUsage.readLedgerEntries = readOnly.length + readWrite.length;
-                console.log(`✅ Read Ledger Entries from footprint: ${realResourceUsage.readLedgerEntries} (${readOnly.length} read-only + ${readWrite.length} read-write)`);
               }
 
               if (realResourceUsage.writeLedgerEntries === 0) {
                 realResourceUsage.writeLedgerEntries = readWrite.length;
-                console.log(`✅ Write Ledger Entries from footprint: ${realResourceUsage.writeLedgerEntries}`);
               }
             } else {
-              console.warn('⚠️ resources.footprint is null or undefined');
             }
           } catch (footprintError: any) {
-            console.warn('⚠️ Could not extract from resources.footprint:', footprintError.message);
-            console.error('Stack:', footprintError.stack);
           }
         } else {
-          console.log('✅ Entry counts already set - read:', realResourceUsage.readLedgerEntries, 'write:', realResourceUsage.writeLedgerEntries);
         }
-
-        console.log('✅ Extracted BUDGETED resource usage from envelope sorobanData:', realResourceUsage);
       } catch (envDataError: any) {
-        console.warn('⚠️ Could not parse envelope sorobanData:', envDataError.message);
       }
     }
 
@@ -3283,21 +2765,14 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
     if (simulationData && 'transactionData' in simulationData && realResourceUsage.cpuInstructions === 0) {
       try {
         const txData = (simulationData as any).transactionData;
-        console.log('📊 Simulation has transactionData:', !!txData);
-        console.log('📊 transactionData type:', typeof txData);
-        console.log('📊 transactionData keys:', txData ? Object.keys(txData) : 'null');
-        console.log('📊 transactionData.toXDR:', typeof txData?.toXDR);
-        console.log('📊 transactionData value:', txData);
 
         if (txData) {
           // Check if it's already a parsed object with resources() method
           if (typeof txData.resources === 'function') {
             const resources = txData.resources();
-            console.log('📊 Found parsed transactionData resources');
 
             if (resources.instructions) {
               realResourceUsage.cpuInstructions = Number(resources.instructions());
-              console.log(`✅ CPU Instructions from parsed txData: ${realResourceUsage.cpuInstructions.toLocaleString()}`);
             }
             if (resources.readBytes) realResourceUsage.readBytes = Number(resources.readBytes());
             if (resources.writeBytes) realResourceUsage.writeBytes = Number(resources.writeBytes());
@@ -3313,32 +2788,25 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
 
                 if (realResourceUsage.readLedgerEntries === 0) {
                   realResourceUsage.readLedgerEntries = readOnly.length + readWrite.length;
-                  console.log(`✅ Read Ledger Entries from parsed footprint: ${realResourceUsage.readLedgerEntries}`);
                 }
 
                 if (realResourceUsage.writeLedgerEntries === 0) {
                   realResourceUsage.writeLedgerEntries = readWrite.length;
-                  console.log(`✅ Write Ledger Entries from parsed footprint: ${realResourceUsage.writeLedgerEntries}`);
                 }
               } catch (footprintError: any) {
-                console.warn('⚠️ Could not extract from parsed footprint:', footprintError.message);
               }
             }
-
-            console.log('✅ Extracted resource usage from parsed txData:', realResourceUsage);
           }
           // If it's an XDR object/string, try to parse it
           else if (txData.toXDR || typeof txData === 'string') {
             try {
               const txDataXdr = typeof txData === 'string' ? txData : txData.toXDR('base64');
-              console.log('📊 Parsing transactionData XDR...');
 
               const parsedTxData = StellarSdk.xdr.SorobanTransactionData.fromXDR(txDataXdr, 'base64');
               const resources = parsedTxData.resources();
 
               if (resources.instructions) {
                 realResourceUsage.cpuInstructions = Number(resources.instructions());
-                console.log(`✅ CPU Instructions from XDR: ${realResourceUsage.cpuInstructions.toLocaleString()}`);
               }
               if ((resources as any).readBytes) realResourceUsage.readBytes = Number((resources as any).readBytes());
               if ((resources as any).writeBytes) realResourceUsage.writeBytes = Number((resources as any).writeBytes());
@@ -3355,27 +2823,20 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
 
                     if (realResourceUsage.readLedgerEntries === 0) {
                       realResourceUsage.readLedgerEntries = readOnly.length + readWrite.length;
-                      console.log(`✅ Read Ledger Entries from XDR footprint: ${realResourceUsage.readLedgerEntries}`);
                     }
 
                     if (realResourceUsage.writeLedgerEntries === 0) {
                       realResourceUsage.writeLedgerEntries = readWrite.length;
-                      console.log(`✅ Write Ledger Entries from XDR footprint: ${realResourceUsage.writeLedgerEntries}`);
                     }
                   }
                 } catch (footprintError: any) {
-                  console.warn('⚠️ Could not extract from XDR footprint:', footprintError.message);
                 }
               }
-
-              console.log('✅ Extracted resource usage from XDR:', realResourceUsage);
             } catch (xdrError: any) {
-              console.warn('⚠️ Could not parse transactionData XDR:', xdrError.message);
             }
           }
         }
       } catch (txDataError: any) {
-        console.warn('⚠️ Could not extract resources from txData:', txDataError.message);
       }
     }
 
@@ -3384,28 +2845,18 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
       try {
         const cost = (simulationData as any).cost;
         if (cost) {
-          console.log('📊 Extracting resources from simulation cost:', cost);
           if (cost.cpuInsns) realResourceUsage.cpuInstructions = parseInt(cost.cpuInsns);
           if (cost.memBytes) realResourceUsage.memoryBytes = parseInt(cost.memBytes);
           if (cost.readBytes) realResourceUsage.readBytes = parseInt(cost.readBytes);
           if (cost.writeBytes) realResourceUsage.writeBytes = parseInt(cost.writeBytes);
-
-          console.log(`✅ Simulation resources - CPU: ${realResourceUsage.cpuInstructions.toLocaleString()}, Memory: ${realResourceUsage.memoryBytes.toLocaleString()} bytes`);
         }
       } catch (costError: any) {
-        console.warn('⚠️ Could not extract cost from simulation:', costError.message);
       }
     }
 
     // Parse metadata XDR - try multiple sources
-    console.log('🔍 Checking metadata sources...');
-    console.log('  - sorobanData available:', !!sorobanData);
-    console.log('  - tx.result_meta_xdr:', !!(tx as any).result_meta_xdr);
-    console.log('  - tx.soroban_meta_xdr:', !!(tx as any).soroban_meta_xdr);
 
     if (sorobanData) {
-      console.log('  - sorobanData.status:', sorobanData.status);
-      console.log('  - sorobanData.resultMetaXdr:', !!sorobanData.resultMetaXdr);
     }
 
     // Priority order: Soroban RPC > Horizon soroban_meta_xdr > Horizon result_meta_xdr
@@ -3414,38 +2865,29 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
     // If Soroban RPC returned NOT_FOUND or no metaXdr, use Horizon's XDR
     if (!metaXdr) {
       if ((tx as any).soroban_meta_xdr) {
-        console.log('✅ Using Horizon soroban_meta_xdr (fee-bumped transaction)');
         metaXdr = (tx as any).soroban_meta_xdr;
       } else if ((tx as any).result_meta_xdr) {
-        console.log('✅ Using Horizon result_meta_xdr');
         metaXdr = (tx as any).result_meta_xdr;
       }
     } else {
-      console.log('✅ Using Soroban RPC metaXdr');
     }
 
     if (metaXdr) {
       try {
-        console.log('✅ Found meta XDR, parsing...');
         const meta = StellarSdk.xdr.TransactionMeta.fromXDR(metaXdr, 'base64');
         const metaSwitch = meta.switch();
         const metaType = (metaSwitch as any).name || String(metaSwitch);
 
-        console.log(`📦 Soroban meta type: ${metaType}`);
-
         // Handle both v3 and v4 transaction meta
         if (metaType === 'transactionMetaV3' || metaType === '3' || metaType === 'transactionMetaV4' || metaType === '4') {
           const metaVersion = (metaType === 'transactionMetaV4' || metaType === '4') ? (meta as any).v4() : meta.v3();
-          console.log(`🔍 Using meta version: ${metaType}`);
 
           if (metaVersion.sorobanMeta && metaVersion.sorobanMeta()) {
             const sorobanMeta = metaVersion.sorobanMeta();
-            console.log('✅ Found sorobanMeta');
 
             // Extract diagnostic events for contract execution logs
             try {
               const diagnosticEvents = sorobanMeta.diagnosticEvents ? sorobanMeta.diagnosticEvents() : [];
-              console.log(`🔍 Found ${diagnosticEvents.length} diagnostic events`);
 
               if (diagnosticEvents.length > 0) {
                 diagnosticEvents.forEach((event: any, idx: number) => {
@@ -3467,8 +2909,6 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                     const bodySwitch = body.switch();
                     const bodyType = (bodySwitch as any).name || String(bodySwitch);
 
-                    console.log(`📋 Event ${idx}: type=${bodyType}, contract=${contractId.substring(0, 12)}..., success=${inSuccessfulContractCall}`);
-
                     // Extract topics and data from contract events
                     if (bodyType === 'contractEvent' || bodyType === '0') {
                       try {
@@ -3489,34 +2929,28 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                           logs.push(`   Data: ${JSON.stringify(dataStr)}`);
                         } catch {}
                       } catch (bodyError: any) {
-                        console.warn(`⚠️ Could not parse event ${idx} body:`, bodyError.message);
                       }
                     }
                   } catch (eventError: any) {
-                    console.warn(`⚠️ Could not process diagnostic event ${idx}:`, eventError.message);
                   }
                 });
               }
             } catch (diagError: any) {
-              console.warn('⚠️ Could not extract diagnostic events:', diagError.message);
             }
 
             // First, let's log what's directly available on sorobanMeta
-            console.log('🔍 sorobanMeta available methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(sorobanMeta)));
 
             // Extract ACTUAL resource usage from sorobanMeta
             // The structure is: sorobanMeta.ext().v1().ext().v0() contains actual consumed resources
             try {
               const ext = sorobanMeta.ext();
               const extSwitch = ext.switch();
-              console.log(`🔍 Soroban ext switch value:`, extSwitch);
 
               if (extSwitch === 1) {
                 // Get v1 extension which contains resource info
                 const v1Ext = (ext as any).v1?.() || (ext as any)._value;
 
                 if (!v1Ext) {
-                  console.warn('⚠️ Could not access v1 extension');
                   throw new Error('v1 extension not accessible');
                 }
 
@@ -3525,13 +2959,11 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                 const v1ExtExt = v1Ext.ext?.();
                 if (v1ExtExt) {
                   const v1ExtExtSwitch = v1ExtExt.switch?.();
-                  console.log(`🔍 v1Ext.ext().switch():`, v1ExtExtSwitch);
 
                   if (v1ExtExtSwitch === 0) {
                     // Protocol 20: Get actual consumed resources from v0
                     const consumedResources = (v1ExtExt as any).v0?.() || (v1ExtExt as any)._value;
                     if (consumedResources) {
-                      console.log('✅ Found actual consumed resources in v0');
 
                       // Extract CPU and memory
                       const cpuInsns = consumedResources.ext?.()?.v0?.()?.cpuInsns?.();
@@ -3540,13 +2972,11 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                       if (cpuInsns) {
                         realResourceUsage.cpuInstructions = Number(cpuInsns);
                         realResourceUsage.isActual = true;
-                        console.log(`✅ [ACTUAL] CPU: ${realResourceUsage.cpuInstructions.toLocaleString()}`);
                       }
 
                       if (memBytes) {
                         realResourceUsage.memoryBytes = Number(memBytes);
                         realResourceUsage.isActual = true;
-                        console.log(`✅ [ACTUAL] Memory: ${realResourceUsage.memoryBytes.toLocaleString()} bytes`);
                       }
                     }
                   }
@@ -3560,9 +2990,6 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
 
                     if (switchVal === 0 && typeof innerExt.v0 === 'function') {
                       const v0Data = innerExt.v0();
-                      console.log('🔍 Got v0 data:', v0Data);
-                      console.log('🔍 v0 keys:', Object.keys(v0Data));
-                      console.log('🔍 v0 prototype methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(v0Data)));
 
                       // Extract from v0Data - try both full names and abbreviations
                       const cpuExtractors = ['cpuInsns', 'cpuInstructions', 'totalCpuInsns'];
@@ -3572,7 +2999,6 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                         if (typeof v0Data[method] === 'function') {
                           realResourceUsage.cpuInstructions = Number(v0Data[method]());
                           realResourceUsage.isActual = true;
-                          console.log(`✅ [ACTUAL v0.${method}] CPU: ${realResourceUsage.cpuInstructions.toLocaleString()}`);
                           break;
                         }
                       }
@@ -3581,7 +3007,6 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                         if (typeof v0Data[method] === 'function') {
                           realResourceUsage.memoryBytes = Number(v0Data[method]());
                           realResourceUsage.isActual = true;
-                          console.log(`✅ [ACTUAL v0.${method}] Memory: ${realResourceUsage.memoryBytes.toLocaleString()} bytes`);
                           break;
                         }
                       }
@@ -3589,27 +3014,21 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                       if (typeof v0Data.readBytes === 'function') {
                         const rb = Number(v0Data.readBytes());
                         realResourceUsage.readBytes = rb;
-                        console.log(`✅ [v0] Read: ${rb.toLocaleString()} bytes`);
                       }
                       if (typeof v0Data.writeBytes === 'function') {
                         const wb = Number(v0Data.writeBytes());
                         realResourceUsage.writeBytes = wb;
-                        console.log(`✅ [v0] Write: ${wb.toLocaleString()} bytes`);
                       }
                       if (typeof v0Data.readLedgerEntries === 'function') {
                         const rle = Number(v0Data.readLedgerEntries());
                         realResourceUsage.readLedgerEntries = rle;
-                        console.log(`✅ [v0] Read entries: ${rle}`);
                       }
                       if (typeof v0Data.writeLedgerEntries === 'function') {
                         const wle = Number(v0Data.writeLedgerEntries());
                         realResourceUsage.writeLedgerEntries = wle;
-                        console.log(`✅ [v0] Write entries: ${wle}`);
                       }
                     }
                   } catch (extCallError: any) {
-                    console.warn('⚠️ Error calling v1Ext.ext():', extCallError.message);
-                    console.error(extCallError);
                   }
                 }
 
@@ -3622,13 +3041,10 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                   if (typeof v1Ext.totalCpuInsns === 'function') {
                     const cpuValue = v1Ext.totalCpuInsns();
                     const memValue = typeof v1Ext.totalMemBytes === 'function' ? v1Ext.totalMemBytes() : 0;
-                    console.log(`🔍 [Functions] Raw CPU value:`, cpuValue, 'type:', typeof cpuValue);
-                    console.log(`🔍 [Functions] Raw Mem value:`, memValue, 'type:', typeof memValue);
 
                     realResourceUsage.cpuInstructions = Number(cpuValue);
                     realResourceUsage.memoryBytes = Number(memValue);
                     realResourceUsage.isActual = true;
-                    console.log(`✅ [Direct functions] CPU: ${realResourceUsage.cpuInstructions.toLocaleString()}, Memory: ${realResourceUsage.memoryBytes.toLocaleString()} bytes`);
                     resourceMetrics = v1Ext;
                   }
                   // Fallback to direct properties
@@ -3636,12 +3052,9 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                     realResourceUsage.cpuInstructions = Number(v1Ext.totalCpuInsns);
                     realResourceUsage.memoryBytes = Number(v1Ext.totalMemBytes || 0);
                     realResourceUsage.isActual = true;
-                    console.log(`✅ [Direct properties] CPU: ${realResourceUsage.cpuInstructions.toLocaleString()}, Memory: ${realResourceUsage.memoryBytes.toLocaleString()} bytes`);
                     resourceMetrics = v1Ext;
                   }
                 } catch (directError: any) {
-                  console.warn('⚠️ Direct access error:', directError.message);
-                  console.error(directError);
                 }
 
                 // Path 2: From ext.v1 - ALWAYS try this for complete metrics
@@ -3655,7 +3068,6 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                       const resourceUsageExt = extV1.v1();
 
                       if (resourceUsageExt.resourceFeeCharged) {
-                        console.log(`💰 Resource fee: ${Number(resourceUsageExt.resourceFeeCharged()).toLocaleString()} stroops`);
                       }
 
                       // Try ext.v1.ext.v1 for detailed metrics
@@ -3668,7 +3080,6 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                           const actualMetrics = resourceExtV1.v1();
 
                           // Debug: Log all available fields
-                          console.log('🔍 actualMetrics available methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(actualMetrics)));
 
                           // Extract all available metrics (override if better data available)
                           if (actualMetrics.cpuInstructions) {
@@ -3688,98 +3099,69 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                           if (actualMetrics.readBytes) {
                             const rb = Number(actualMetrics.readBytes());
                             realResourceUsage.readBytes = rb;
-                            console.log(`✅ [Nested] readBytes: ${rb}`);
                           }
                           if (actualMetrics.writeBytes) {
                             const wb = Number(actualMetrics.writeBytes());
                             realResourceUsage.writeBytes = wb;
-                            console.log(`✅ [Nested] writeBytes: ${wb}`);
                           }
                           if (actualMetrics.readLedgerEntries) {
                             const rle = Number(actualMetrics.readLedgerEntries());
                             realResourceUsage.readLedgerEntries = rle;
-                            console.log(`✅ [Nested] readLedgerEntries: ${rle}`);
                           }
                           if (actualMetrics.writeLedgerEntries) {
                             const wle = Number(actualMetrics.writeLedgerEntries());
                             realResourceUsage.writeLedgerEntries = wle;
-                            console.log(`✅ [Nested] writeLedgerEntries: ${wle}`);
                           }
 
                           // Calculate memory from I/O if not available
                           if (realResourceUsage.memoryBytes === 0 && (realResourceUsage.readBytes > 0 || realResourceUsage.writeBytes > 0)) {
                             realResourceUsage.memoryBytes = realResourceUsage.readBytes + realResourceUsage.writeBytes;
-                            console.log(`💡 Calculated memory from I/O: ${realResourceUsage.memoryBytes.toLocaleString()} bytes`);
                           }
-
-                          console.log(`✅ [Nested ext.v1.ext.v1] CPU: ${realResourceUsage.cpuInstructions.toLocaleString()}, Memory: ${realResourceUsage.memoryBytes.toLocaleString()} bytes`);
-                          console.log(`✅ [Nested] I/O: Read ${realResourceUsage.readBytes} bytes, Write ${realResourceUsage.writeBytes} bytes`);
-                          console.log(`✅ [Nested] Ledger entries: Read ${realResourceUsage.readLedgerEntries}, Write ${realResourceUsage.writeLedgerEntries}`);
                           resourceMetrics = actualMetrics;
                         }
                       }
                     }
                   } catch (nestedError: any) {
-                    console.warn('⚠️ Could not extract from nested ext:', nestedError.message);
                   }
                 }
 
                 // Extract fee information
                 try {
                   if (v1Ext.totalNonRefundableResourceFeeCharged) {
-                    console.log(`💰 Non-refundable: ${v1Ext.totalNonRefundableResourceFeeCharged()} stroops`);
                   }
                   if (v1Ext.totalRefundableResourceFeeCharged) {
-                    console.log(`💰 Refundable: ${v1Ext.totalRefundableResourceFeeCharged()} stroops`);
                   }
                 } catch {}
               }
             } catch (extError: any) {
-              console.warn('⚠️ Could not extract ext data:', extError.message);
             }
           }
         } else {
-          console.warn(`⚠️ Unexpected meta type: ${metaType}`);
         }
       } catch (metaError: any) {
-        console.warn('⚠️ Could not parse resultMetaXdr:', metaError.message);
-        console.error(metaError);
       }
     } else {
-      console.warn('⚠️ No sorobanData or resultMetaXdr available');
-      console.log('sorobanData keys:', sorobanData ? Object.keys(sorobanData) : 'null');
 
       // Try to extract footprint from sorobanData at transaction level
       if (sorobanData && sorobanData.resources) {
-        console.log('🔍 Attempting to extract footprint from transaction.sorobanData.resources');
         try {
           const resources = sorobanData.resources;
-          console.log('resources:', resources);
-          console.log('resources keys:', Object.keys(resources));
 
           if (resources.footprint) {
-            console.log('✅ Found footprint in sorobanData');
             const footprint = resources.footprint;
-            console.log('footprint keys:', Object.keys(footprint));
 
             const readOnly = footprint.read_only || footprint.readOnly || [];
             const readWrite = footprint.read_write || footprint.readWrite || [];
 
-            console.log('readOnly array length:', readOnly.length);
-            console.log('readWrite array length:', readWrite.length);
-
             if (readOnly.length > 0 || readWrite.length > 0) {
               realResourceUsage.readLedgerEntries = readOnly.length + readWrite.length;
               realResourceUsage.writeLedgerEntries = readWrite.length;
-
-              console.log(`✅ Extracted from sorobanData.resources.footprint: ${readOnly.length} RO, ${readWrite.length} RW`);
 
               // Calculate bytes from footprint entries - they are base64 XDR strings
               readOnly.forEach((entry: any, idx: number) => {
                 const xdr = entry.xdr || entry;
                 const size = typeof xdr === 'string' ? xdr.length : 0;
                 realResourceUsage.readBytes += size;
-                if (idx === 0) console.log(`Sample RO entry:`, entry, `size: ${size}`);
               });
 
               readWrite.forEach((entry: any, idx: number) => {
@@ -3787,42 +3169,25 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                 const size = typeof xdr === 'string' ? xdr.length : 0;
                 realResourceUsage.readBytes += size;
                 realResourceUsage.writeBytes += size;
-                if (idx === 0) console.log(`Sample RW entry:`, entry, `size: ${size}`);
               });
-
-              console.log(`✅ Calculated bytes - Read: ${realResourceUsage.readBytes}, Write: ${realResourceUsage.writeBytes}`);
             } else {
-              console.warn('⚠️ Footprint found but has 0 entries');
             }
           } else {
-            console.warn('⚠️ resources.footprint not found, checking alternate locations');
-            console.log('Available resource keys:', Object.keys(resources));
           }
         } catch (footprintError: any) {
-          console.error('❌ Failed to extract footprint from sorobanData:', footprintError);
-          console.error('Stack:', footprintError.stack);
         }
       } else if (sorobanData) {
-        console.warn('⚠️ sorobanData exists but has no resources property');
-        console.log('Full sorobanData:', sorobanData);
-        console.log('sorobanData keys:', Object.keys(sorobanData));
-        console.log('sorobanData type:', typeof sorobanData);
 
         // Try to stringify to see the structure
         try {
-          console.log('sorobanData JSON:', JSON.stringify(sorobanData, null, 2));
         } catch (e) {
-          console.log('Could not stringify sorobanData');
         }
 
         // Try direct property access
-        console.log('sorobanData._attributes:', (sorobanData as any)._attributes);
 
         // Try method calls
         if (typeof (sorobanData as any).resources === 'function') {
-          console.log('⚠️ resources is a function! Calling it...');
           const res = (sorobanData as any).resources();
-          console.log('resources() result:', res);
         }
       }
     }
@@ -4162,7 +3527,6 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
         }
 
       } catch (metaError: any) {
-        console.warn('Could not extract resource usage from metadata:', metaError.message);
       }
     }
 
@@ -4281,87 +3645,58 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
     // Final consolidation: if memory is still 0 but we have I/O bytes, calculate it
     if (realResourceUsage.memoryBytes === 0 && (realResourceUsage.readBytes > 0 || realResourceUsage.writeBytes > 0)) {
       realResourceUsage.memoryBytes = realResourceUsage.readBytes + realResourceUsage.writeBytes;
-      console.log(`💡 Final memory calculation from I/O: ${realResourceUsage.memoryBytes.toLocaleString()} bytes`);
     }
 
     // FINAL AGGRESSIVE FOOTPRINT EXTRACTION - Last resort to get entry counts
-    console.log('🔍 FINAL CHECK: Ledger entry counts before return:', {
-      readLedgerEntries: realResourceUsage.readLedgerEntries,
-      writeLedgerEntries: realResourceUsage.writeLedgerEntries
-    });
 
     if (realResourceUsage.readLedgerEntries === 0 || realResourceUsage.writeLedgerEntries === 0) {
-      console.log('⚠️ Entry counts still 0, attempting final footprint extraction from envelope...');
 
       try {
         // Try to parse envelope XDR and extract footprint
         const envelopeXdr = (tx as any).envelope_xdr;
-        console.log('📦 envelope_xdr exists:', !!envelopeXdr);
 
         if (envelopeXdr) {
-          console.log('📦 Parsing envelope XDR for footprint...');
           const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(envelopeXdr, 'base64');
-          console.log('✅ Envelope parsed successfully');
 
           let txEnvelope: any = null;
           const envSwitch = envelope.switch();
-          console.log('📦 Envelope type:', envSwitch.name || String(envSwitch));
 
           if (envSwitch.name === 'envelopeTypeTx' || String(envSwitch) === '2') {
             txEnvelope = envelope.v1();
-            console.log('✅ Using v1 envelope');
           } else if (envSwitch.name === 'envelopeTypeTxV0' || String(envSwitch) === '0') {
             txEnvelope = envelope.v0();
-            console.log('✅ Using v0 envelope');
           } else if (envSwitch.name === 'envelopeTypeTxFeeBump' || String(envSwitch) === '5') {
             const feeBump = envelope.feeBump();
             txEnvelope = feeBump.tx().innerTx().v1();
-            console.log('✅ Using fee-bumped envelope (inner v1)');
           }
 
           if (txEnvelope) {
-            console.log('✅ txEnvelope obtained');
             const txBody = txEnvelope.tx();
-            console.log('✅ txBody obtained');
             const ext = txBody.ext();
-            console.log('📦 Extension switch value:', ext.switch ? ext.switch().value : 'no switch');
 
             if (ext && ext.switch && ext.switch().value === 1) {
-              console.log('✅ Extension has Soroban data');
               const sorobanData = ext.sorobanData();
-              console.log('✅ sorobanData obtained');
               const footprint = sorobanData.resources().footprint();
-              console.log('✅ footprint obtained');
 
               const readOnly = footprint.readOnly();
               const readWrite = footprint.readWrite();
-              console.log(`📊 Footprint: ${readOnly.length} read-only, ${readWrite.length} read-write`);
 
               if (realResourceUsage.readLedgerEntries === 0) {
                 realResourceUsage.readLedgerEntries = readOnly.length + readWrite.length;
-                console.log(`✅ FINAL: Read Ledger Entries from envelope footprint: ${realResourceUsage.readLedgerEntries} (${readOnly.length} RO + ${readWrite.length} RW)`);
               }
 
               if (realResourceUsage.writeLedgerEntries === 0) {
                 realResourceUsage.writeLedgerEntries = readWrite.length;
-                console.log(`✅ FINAL: Write Ledger Entries from envelope footprint: ${realResourceUsage.writeLedgerEntries}`);
               }
             } else {
-              console.warn('⚠️ Extension does not contain Soroban data (ext.switch.value !== 1)');
             }
           } else {
-            console.warn('⚠️ Could not extract txEnvelope from envelope');
           }
         } else {
-          console.warn('⚠️ No envelope_xdr found in transaction');
         }
       } catch (finalError: any) {
-        console.error('❌ Final footprint extraction failed:', finalError);
-        console.error('Stack:', finalError.stack);
       }
     }
-
-    console.log('📊 FINAL RESOURCE USAGE (actual data only):', realResourceUsage);
 
     // Enhanced simulation with debug information
     const simulation: SimulationResult = {
@@ -4414,10 +3749,10 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                   if (decoded.switch().name === 'scvAddress') {
                     const addr = decoded.address();
                     if (addr.switch().name === 'scAddressTypeContract') {
-                      const contractId = StellarSdk.StrKey.encodeContract(addr.contractId());
+                      const contractId = StellarSdk.StrKey.encodeContract(Buffer.from(Array.from(addr.contractId() as any)));
                       opLogs.push(`║   [${idx}] Contract Address: ${contractId.substring(0, 20)}...`);
                     } else if (addr.switch().name === 'scAddressTypeAccount') {
-                      const accountId = StellarSdk.StrKey.encodeEd25519PublicKey(addr.accountId().ed25519());
+                      const accountId = StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(Array.from(addr.accountId().ed25519() as any)));
                       opLogs.push(`║   [${idx}] Account Address: ${accountId.substring(0, 20)}...`);
                     }
                   }
@@ -4574,7 +3909,6 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
     };
 
   } catch (error: any) {
-    console.error('❌ Enhanced simulation error:', error);
     
     const simulation: SimulationResult = {
       success: false,

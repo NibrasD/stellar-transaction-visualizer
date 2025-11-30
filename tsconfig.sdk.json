@@ -14,8 +14,9 @@
     "strict": false,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "jsx": "react-jsx"
   },
-  "include": ["src/sdk/**/*"],
+  "include": ["src/sdk/**/*", "src/services/**/*", "src/types/**/*"],
   "exclude": ["node_modules", "dist"]
 }

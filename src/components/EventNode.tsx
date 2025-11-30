@@ -64,13 +64,6 @@ export function EventNode({ data }: NodeProps<EventNodeData>) {
   const { event, parentOperationIndex, eventIndex, operationData } = data;
 
   // Debug logging
-  console.log(`Event Node #${eventIndex}:`, {
-    hasOperationData: !!operationData,
-    stateChangesCount: operationData?.stateChanges?.length || 0,
-    ttlExtensionsCount: operationData?.ttlExtensions?.length || 0,
-    stateChanges: operationData?.stateChanges,
-    ttlExtensions: operationData?.ttlExtensions
-  });
 
   // Safety check
   if (!event) {
@@ -114,7 +107,6 @@ export function EventNode({ data }: NodeProps<EventNodeData>) {
         try {
           val = decodeScVal(val);
         } catch (e) {
-          console.warn('ScVal decode failed:', e);
         }
       }
 
@@ -149,7 +141,6 @@ export function EventNode({ data }: NodeProps<EventNodeData>) {
 
       return String(val);
     } catch (e) {
-      console.warn('formatValue error:', e, val);
       return '[Error]';
     }
   };
@@ -192,7 +183,6 @@ export function EventNode({ data }: NodeProps<EventNodeData>) {
       }
     });
   } catch (e) {
-    console.error('Error decoding event:', e);
   }
 
   const eventType = decodedTopics.length > 0 ? String(decodedTopics[0]) : 'Event';

@@ -11,13 +11,6 @@ export function SimulationPanel({ result }: SimulationPanelProps) {
   const [showStackTrace, setShowStackTrace] = React.useState(true);
   const [showOperationBreakdown, setShowOperationBreakdown] = React.useState(true);
 
-  console.log('🎯 SimulationPanel received result:', result);
-  console.log('🎯 Enhanced debug info:', result.enhancedDebugInfo);
-  console.log('🎯 Resource usage:', result.enhancedDebugInfo?.resourceUsage);
-  console.log('🎯 Resource usage DETAILED:', JSON.stringify(result.enhancedDebugInfo?.resourceUsage, null, 2));
-  console.log('🎯 Logs count:', result.enhancedDebugInfo?.logs?.length || 0);
-  console.log('🎯 Operation breakdown count:', result.enhancedDebugInfo?.operationBreakdown?.length || 0);
-
   const isSingleOperation = result.enhancedDebugInfo?.operationBreakdown?.length === 1;
   const singleOpSuccess = isSingleOperation ? result.enhancedDebugInfo?.operationBreakdown[0].success : null;
 

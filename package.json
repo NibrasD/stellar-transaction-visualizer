@@ -1,13 +1,35 @@
 {
-  "name": "@stellar/transaction-visualizer",
+  "name": "@nibrasd/transaction-visualizer",
+  "description": "Stellar Transaction Visualizer SDK - analyze classic and Soroban transactions, with contract simulator and debug info",
   "version": "0.1.0",
+  "keywords": [
+    "stellar",
+    "soroban",
+    "blockchain",
+    "transaction",
+    "visualizer",
+    "smart-contracts",
+    "sdk",
+    "crypto"
+  ],
+  "author": "Nibras D",
+  "license": "MIT",
   "type": "module",
   "main": "dist/sdk/index.js",
   "types": "dist/sdk/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/sdk/index.js",
+      "types": "./dist/sdk/index.d.ts"
+    }
+  },
   "files": [
     "dist/sdk",
     "dist/services",
-    "dist/types"
+    "dist/types",
+    "README.md",
+    "CHANGELOG.md",
+    "examples"
   ],
   "scripts": {
     "dev": "vite",
@@ -47,5 +69,13 @@
     "tailwindcss": "^3.3.5",
     "typescript": "^5.2.2",
     "vite": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NibrasD/stellar-transaction-visualizer.git"
+  },
+  "homepage": "https://github.com/NibrasD/stellar-transaction-visualizer#readme",
+  "bugs": {
+    "url": "https://github.com/NibrasD/stellar-transaction-visualizer/issues"
   }
 }

@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stellar Transaction Visualizer - Basic Demo (Without SDK)</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f5f7fa;
+    }
+    .container {
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #1a1a1a;
+      margin-bottom: 10px;
+    }
+    .subtitle {
+      color: #666;
+      margin-bottom: 30px;
+    }
+    .network-toggle {
+      margin-bottom: 20px;
+      padding: 15px;
+      background: #f0f4f8;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .network-toggle label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .network-toggle input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+    }
+    .network-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-left: auto;
+    }
+    .network-badge.mainnet {
+      background: #e8f5e9;
+      color: #2e7d32;
+    }
+    .network-badge.testnet {
+      background: #fff3e0;
+      color: #f57c00;
+    }
+    .input-group {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    input[type="text"] {
+      flex: 1;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: 'Courier New', monospace;
+    }
+    input[type="text"]:focus {
+      outline: none;
+      border-color: #0066cc;
+    }
+    button {
+      padding: 12px 24px;
+      background: #0066cc;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: background 0.2s;
+    }
+    button:hover {
+      background: #0052a3;
+    }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #666;
+    }
+    .loading::after {
+      content: '...';
+      animation: dots 1.5s steps(4, end) infinite;
+    }
+    @keyframes dots {
+      0%, 20% { content: '.'; }
+      40% { content: '..'; }
+      60%, 100% { content: '...'; }
+    }
+    .result {
+      background: #f9f9f9;
+      padding: 20px;
+      border-radius: 8px;
+      border-left: 4px solid #0066cc;
+      margin-top: 20px;
+    }
+    .result h3 {
+      margin-top: 0;
+      color: #1a1a1a;
+    }
+    .operation {
+      background: white;
+      padding: 15px;
+      margin: 10px 0;
+      border-radius: 6px;
+      border: 1px solid #e0e0e0;
+    }
+    .operation-header {
+      font-weight: 600;
+      color: #0066cc;
+      margin-bottom: 8px;
+    }
+    .detail-row {
+      display: flex;
+      padding: 4px 0;
+      font-size: 14px;
+    }
+    .detail-label {
+      font-weight: 600;
+      width: 150px;
+      color: #666;
+      flex-shrink: 0;
+    }
+    .detail-value {
+      color: #1a1a1a;
+      font-family: 'Courier New', monospace;
+      word-break: break-all;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 8px;
+      background: #e3f2fd;
+      color: #1976d2;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      margin: 2px;
+    }
+    .badge.success {
+      background: #e8f5e9;
+      color: #388e3c;
+    }
+    .badge.error {
+      background: #ffebee;
+      color: #d32f2f;
+    }
+    .contract-info {
+      background: #f3e5f5;
+      padding: 12px;
+      border-radius: 6px;
+      margin: 10px 0;
+      border-left: 3px solid #9c27b0;
+    }
+    .info-box {
+      margin-top: 30px;
+      padding: 20px;
+      background: #e3f2fd;
+      border-radius: 8px;
+      border-left: 4px solid #2196f3;
+    }
+    .info-box h4 {
+      margin-top: 0;
+      color: #1565c0;
+    }
+    .info-box ul {
+      margin: 10px 0 0 20px;
+      color: #1565c0;
+    }
+    .error-box {
+      background: #ffebee;
+      border-left-color: #d32f2f;
+    }
+    .error-box h4 {
+      color: #c62828;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Stellar Transaction Visualizer</h1>
+    <p class="subtitle">Basic Demo - Direct Horizon API Integration (Without SDK)</p>
+
+    <div class="network-toggle">
+      <label>
+        <input type="checkbox" id="useTestnet" onchange="updateNetworkBadge()" />
+        <span>Use Testnet</span>
+      </label>
+      <span id="networkBadge" class="network-badge mainnet">MAINNET</span>
+    </div>
+
+    <div class="input-group">
+      <input
+        type="text"
+        id="txHash"
+        placeholder="Enter Stellar transaction hash (64 hex characters)..."
+        value=""
+      />
+      <button onclick="loadTransaction()">Load Transaction</button>
+    </div>
+
+    <div id="result"></div>
+  </div>
+
+  <script type="module">
+    // ⚠️ IMPORTANT: This example uses Horizon API directly for demonstration
+    // For production use, install the full SDK:
+    // npm install @nibrasd/transaction-visualizer
+    //
+    // Full SDK provides:
+    // - Soroban smart contract details extraction
+    // - Contract event parsing and decoding
+    // - Resource usage analysis
+    // - State change tracking
+    // - Cross-contract call detection
+    // - React components with visual flow diagrams
+
+    function updateNetworkBadge() {
+      const isTestnet = document.getElementById('useTestnet').checked;
+      const badge = document.getElementById('networkBadge');
+      badge.textContent = isTestnet ? 'TESTNET' : 'MAINNET';
+      badge.className = `network-badge ${isTestnet ? 'testnet' : 'mainnet'}`;
+    }
+
+    window.updateNetworkBadge = updateNetworkBadge;
+
+    window.loadTransaction = async function() {
+      const txHash = document.getElementById('txHash').value.trim();
+      const resultDiv = document.getElementById('result');
+      const useTestnet = document.getElementById('useTestnet').checked;
+
+      // Validate transaction hash
+      if (!txHash) {
+        resultDiv.innerHTML = `
+          <div class="result error-box">
+            <h4>❌ Validation Error</h4>
+            <p>Please enter a transaction hash.</p>
+          </div>
+        `;
+        return;
+      }
+
+      if (!/^[0-9a-f]{64}$/i.test(txHash)) {
+        resultDiv.innerHTML = `
+          <div class="result error-box">
+            <h4>❌ Invalid Hash Format</h4>
+            <p>Transaction hash must be exactly 64 hexadecimal characters.</p>
+            <p style="margin-top: 10px; font-size: 13px;">Example: <code>a1b2c3d4e5f6...789</code> (64 characters)</p>
+          </div>
+        `;
+        return;
+      }
+
+      // Show loading
+      resultDiv.innerHTML = '<div class="loading">Loading transaction from Horizon API</div>';
+
+      try {
+        // Fetch from correct network
+        const horizonUrl = useTestnet
+          ? 'https://horizon-testnet.stellar.org'
+          : 'https://horizon.stellar.org';
+
+        const response = await fetch(`${horizonUrl}/transactions/${txHash}`);
+
+        if (!response.ok) {
+          if (response.status === 404) {
+            throw new Error(`Transaction not found on ${useTestnet ? 'testnet' : 'mainnet'}. Check the hash and network setting.`);
+          } else if (response.status === 429) {
+            throw new Error('Rate limit exceeded. Please wait a moment and try again.');
+          } else {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+        }
+
+        const tx = await response.json();
+
+        // Show loading for operations
+        resultDiv.innerHTML = '<div class="loading">Loading operations</div>';
+
+        const operationsResponse = await fetch(tx._links.operations.href);
+        if (!operationsResponse.ok) {
+          throw new Error('Failed to fetch operations');
+        }
+
+        const operations = await operationsResponse.json();
+
+        displayTransaction(tx, operations._embedded.records, useTestnet);
+
+      } catch (error) {
+        resultDiv.innerHTML = `
+          <div class="result error-box">
+            <h4>❌ Error Loading Transaction</h4>
+            <p><strong>Message:</strong> ${error.message}</p>
+            ${error.message.includes('not found') ? `
+              <div style="margin-top: 15px; padding: 10px; background: white; border-radius: 4px;">
+                <strong>💡 Tips:</strong>
+                <ul style="margin: 5px 0 0 20px; font-size: 13px;">
+                  <li>Verify the transaction hash is correct</li>
+                  <li>Check if you're on the right network (toggle testnet/mainnet)</li>
+                  <li>Get test transactions from <a href="https://laboratory.stellar.org/#explorer" target="_blank">Stellar Laboratory</a></li>
+                </ul>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }
+    };
+
+    function displayTransaction(tx, operations, isTestnet) {
+      const resultDiv = document.getElementById('result');
+
+      // Calculate fee in XLM
+      const feeInStroops = parseInt(tx.fee_charged);
+      const feeInXLM = (feeInStroops / 10_000_000).toFixed(7);
+
+      let html = `
+        <div class="result">
+          <h3>Transaction Details</h3>
+          <div class="detail-row">
+            <div class="detail-label">Hash:</div>
+            <div class="detail-value" style="font-size: 12px;">${tx.hash}</div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">Status:</div>
+            <div class="detail-value">
+              <span class="badge ${tx.successful ? 'success' : 'error'}">
+                ${tx.successful ? '✅ SUCCESS' : '❌ FAILED'}
+              </span>
+            </div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">Network:</div>
+            <div class="detail-value">
+              <span class="badge ${isTestnet ? 'testnet' : 'mainnet'}" style="background: ${isTestnet ? '#fff3e0' : '#e8f5e9'}; color: ${isTestnet ? '#f57c00' : '#2e7d32'};">
+                ${isTestnet ? 'TESTNET' : 'MAINNET'}
+              </span>
+            </div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">Source Account:</div>
+            <div class="detail-value" style="font-size: 11px;">${tx.source_account}</div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">Fee:</div>
+            <div class="detail-value">
+              ${feeInStroops.toLocaleString()} stroops
+              <span style="color: #666;">(${feeInXLM} XLM)</span>
+            </div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">Operations:</div>
+            <div class="detail-value">${operations.length}</div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">Ledger:</div>
+            <div class="detail-value">${tx.ledger}</div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">Created:</div>
+            <div class="detail-value">${new Date(tx.created_at).toLocaleString()}</div>
+          </div>
+      `;
+
+      html += '<h3 style="margin-top: 30px;">Operations</h3>';
+
+      if (operations.length === 0) {
+        html += '<p style="color: #666; font-style: italic;">No operations found.</p>';
+      }
+
+      operations.forEach((op, index) => {
+        html += `
+          <div class="operation">
+            <div class="operation-header">
+              Operation ${index + 1}: ${op.type.replace(/_/g, ' ').toUpperCase()}
+            </div>
+        `;
+
+        if (op.type === 'invoke_host_function') {
+          html += `
+            <div class="contract-info">
+              <strong>🔷 Smart Contract Invocation</strong>
+              <div style="margin-top: 8px; color: #666; font-size: 13px;">
+                ℹ️ Horizon API provides limited contract details. For full smart contract analysis including:
+                <ul style="margin: 8px 0 0 20px;">
+                  <li>Contract ID extraction</li>
+                  <li>Function names and parameters</li>
+                  <li>Event parsing and decoding</li>
+                  <li>Resource usage breakdown</li>
+                  <li>Cross-contract call tracking</li>
+                </ul>
+                Use the full SDK: <code style="background: white; padding: 2px 6px; border-radius: 3px;">npm install @nibrasd/transaction-visualizer</code>
+              </div>
+            </div>
+          `;
+        } else if (op.type === 'payment') {
+          html += `
+            <div class="detail-row">
+              <div class="detail-label">From:</div>
+              <div class="detail-value" style="font-size: 11px;">${op.from || op.source_account}</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">To:</div>
+              <div class="detail-value" style="font-size: 11px;">${op.to}</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">Amount:</div>
+              <div class="detail-value">${parseFloat(op.amount).toLocaleString()} ${op.asset_type === 'native' ? 'XLM' : op.asset_code || 'Unknown Asset'}</div>
+            </div>
+          `;
+        } else if (op.type === 'create_account') {
+          html += `
+            <div class="detail-row">
+              <div class="detail-label">New Account:</div>
+              <div class="detail-value" style="font-size: 11px;">${op.account}</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">Starting Balance:</div>
+              <div class="detail-value">${parseFloat(op.starting_balance).toLocaleString()} XLM</div>
+            </div>
+          `;
+        } else if (op.type === 'path_payment_strict_send' || op.type === 'path_payment_strict_receive') {
+          const sendAsset = op.source_asset_type === 'native' ? 'XLM' : (op.source_asset_code || 'Unknown');
+          const destAsset = op.asset_type === 'native' ? 'XLM' : (op.asset_code || 'Unknown');
+
+          html += `
+            <div class="detail-row">
+              <div class="detail-label">From:</div>
+              <div class="detail-value" style="font-size: 11px;">${op.from || op.source_account}</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">To:</div>
+              <div class="detail-value" style="font-size: 11px;">${op.to}</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">Send:</div>
+              <div class="detail-value">${parseFloat(op.source_amount || op.amount).toLocaleString()} ${sendAsset}</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">Receive:</div>
+              <div class="detail-value">${parseFloat(op.amount).toLocaleString()} ${destAsset}</div>
+            </div>
+            ${op.path && op.path.length > 0 ? `
+              <div class="detail-row">
+                <div class="detail-label">Path Hops:</div>
+                <div class="detail-value">${op.path.length}</div>
+              </div>
+            ` : ''}
+          `;
+        } else if (op.type === 'manage_sell_offer' || op.type === 'manage_buy_offer') {
+          const buyingAsset = op.buying_asset_type === 'native' ? 'XLM' : (op.buying_asset_code || 'Unknown');
+          const sellingAsset = op.selling_asset_type === 'native' ? 'XLM' : (op.selling_asset_code || 'Unknown');
+
+          html += `
+            <div class="detail-row">
+              <div class="detail-label">Buying:</div>
+              <div class="detail-value">${buyingAsset}</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">Selling:</div>
+              <div class="detail-value">${sellingAsset}</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">Amount:</div>
+              <div class="detail-value">${parseFloat(op.amount).toLocaleString()}</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">Price:</div>
+              <div class="detail-value">${op.price}</div>
+            </div>
+          `;
+        } else {
+          html += `
+            <div style="color: #666; font-size: 13px; font-style: italic;">
+              Operation details available in full SDK
+            </div>
+          `;
+        }
+
+        html += '</div>';
+      });
+
+      html += `
+        <div class="info-box">
+          <h4>💡 Integration Note - This is a Basic Demo</h4>
+          <p style="margin: 0; color: #1565c0;">
+            This example uses Horizon API directly. The <strong>full SDK</strong> provides production-ready features:
+          </p>
+          <ul style="color: #1565c0;">
+            <li><strong>Smart Contract Analysis:</strong> Extract contract IDs, function names, and parameters</li>
+            <li><strong>Event Parsing:</strong> Decode and display contract events with full data</li>
+            <li><strong>Resource Usage:</strong> CPU, memory, fees breakdown</li>
+            <li><strong>State Changes:</strong> Track storage changes and TTL extensions</li>
+            <li><strong>Cross-contract Calls:</strong> Visualize contract interaction chains</li>
+            <li><strong>Visual Components:</strong> React Flow diagrams with interactive nodes</li>
+            <li><strong>TypeScript Support:</strong> Full type definitions</li>
+            <li><strong>Error Handling:</strong> Comprehensive error detection and reporting</li>
+          </ul>
+          <p style="margin: 15px 0 0 0; padding: 12px; background: white; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 14px;">
+            📦 <strong>Install:</strong> npm install @nibrasd/transaction-visualizer
+          </p>
+          <p style="margin: 10px 0 0 0; font-size: 13px;">
+            📚 <a href="../README.md" target="_blank">Full Documentation</a> |
+            📖 <a href="../SDK_DOCUMENTATION.md" target="_blank">API Reference</a> |
+            💻 <a href="../INTEGRATION_EXAMPLES.md" target="_blank">Integration Examples</a>
+          </p>
+        </div>
+      `;
+
+      html += '</div>';
+      resultDiv.innerHTML = html;
+    }
+
+    // Set initial badge
+    updateNetworkBadge();
+  </script>
+</body>
+</html>

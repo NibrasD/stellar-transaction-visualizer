@@ -1,5 +1,5 @@
-import { NetworkConfig, TransactionDetails, SorobanOperation } from '../types/stellar';
-import { fetchTransaction, simulateTransaction, setNetwork } from '../services/stellar';
+import { NetworkConfig, TransactionDetails, SorobanOperation, ContractEvent, StateChange, CrossContractCall, TransactionEffect } from '../types/stellar';
+import { fetchTransaction, setNetwork, decodeScVal } from '../services/stellar';
 
 export class StellarTransactionVisualizer {
   constructor(config?: Partial<NetworkConfig>) {
@@ -22,15 +22,6 @@ export class StellarTransactionVisualizer {
   }
 
   /**
-   * Simulates a transaction to estimate resource usage and potential issues
-   * @param hash Transaction hash
-   * @returns Simulation results including resource usage and potential errors
-   */
-  async simulateTransaction(hash: string) {
-    return simulateTransaction(hash);
-  }
-
-  /**
    * Extracts Soroban-specific operations from a transaction
    * @param transaction Transaction details
    * @returns Array of Soroban operations
@@ -44,16 +35,77 @@ export class StellarTransactionVisualizer {
    * @param transaction Transaction details
    * @returns Array of contract events
    */
-  getContractEvents(transaction: TransactionDetails) {
+  getContractEvents(transaction: TransactionDetails): ContractEvent[] {
     return transaction.events || [];
   }
+
+  /**
+   * Gets state changes from transaction execution
+   * @param transaction Transaction details
+   * @returns Array of state changes across all operations
+   */
+  getStateChanges(transaction: TransactionDetails): StateChange[] {
+    const changes: StateChange[] = [];
+    transaction.sorobanOperations?.forEach(op => {
+      if (op.stateChanges) {
+        changes.push(...op.stateChanges);
+      }
+    });
+    return changes;
+  }
+
+  /**
+   * Gets cross-contract calls from transaction
+   * @param transaction Transaction details
+   * @returns Array of cross-contract calls
+   */
+  getCrossContractCalls(transaction: TransactionDetails): CrossContractCall[] {
+    return transaction.crossContractCalls || [];
+  }
+
+  /**
+   * Gets transaction effects
+   * @param transaction Transaction details
+   * @returns Array of transaction effects
+   */
+  getTransactionEffects(transaction: TransactionDetails): TransactionEffect[] {
+    return transaction.effects || [];
+  }
+
+  /**
+   * Decodes a Soroban ScVal to human-readable format
+   * @param scVal ScVal to decode
+   * @returns Decoded value
+   */
+  decodeScVal(scVal: any): any {
+    return decodeScVal(scVal);
+  }
+
+  /**
+   * Changes the network configuration
+   * @param config Network configuration
+   */
+  setNetwork(config: NetworkConfig): void {
+    setNetwork(config);
+  }
 }
+
+// Export standalone functions for direct use
+export { fetchTransaction, setNetwork, decodeScVal } from '../services/stellar';
 
 // Export types for SDK users
 export type {
   NetworkConfig,
   TransactionDetails,
   SorobanOperation,
-  SimulationResult,
   ContractEvent,
+  StateChange,
+  CrossContractCall,
+  TransactionEffect,
+  ResourceUsage,
+  TtlExtension,
+  TransactionDebugInfo,
 } from '../types/stellar';
+
+// Export default instance for quick usage
+export default StellarTransactionVisualizer;

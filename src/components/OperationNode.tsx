@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Handle, Position } from 'reactflow';
 import { CircleDollarSign, ArrowRightCircle, AlertCircle, Code, Cpu, Zap, UserPlus, Settings, TrendingUp, Shield, Key, Users, ArrowLeftRight, Target, Repeat, ShoppingCart, ArrowRight, Sprout, Wheat } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
@@ -292,7 +292,6 @@ const formatValue = (val: any): string => {
       const hex = Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join('');
       return hex.length > 32 ? `0x${hex.slice(0, 16)}…${hex.slice(-16)}` : `0x${hex}`;
     } catch (e) {
-      console.warn('Failed to decode serialized buffer:', e);
     }
   }
 
@@ -489,7 +488,7 @@ const describeEvent = (event: any): string => {
   }
 
   // Format the contract ID
-  const contractShort = event.contractId && event.contractId !== 'System'
+  const contractShort = event.contractId && event.contractId !== 'Unknown' && event.contractId !== 'System'
     ? `${event.contractId.substring(0, 4)}…${event.contractId.substring(event.contractId.length - 4)}`
     : 'Contract';
 
@@ -690,6 +689,10 @@ interface OperationNodeProps {
 }
 
 export function OperationNodeComponent({ data }: OperationNodeProps) {
+  const [showDevEvents, setShowDevEvents] = useState(false);
+  const [showMetrics, setShowMetrics] = useState(false);
+  const [showLedgerEffects, setShowLedgerEffects] = useState(false);
+
   const getIcon = () => {
     // Check for specific contract functions
     if (data.type === 'invoke_host_function' || data.type === 'invokeHostFunction') {
@@ -917,12 +920,55 @@ export function OperationNodeComponent({ data }: OperationNodeProps) {
 
               return (
                 <>
-                  {/* Contract Events Box */}
+                  {/* Action Buttons */}
                   {regularEvents.length > 0 && (
                     <div className="bg-purple-50 p-3 rounded-lg border border-purple-200">
-                      <div className="text-xs font-bold text-purple-700 mb-2 flex items-center gap-1.5">
-                        <span>🟪</span>
-                        <span>CONTRACT EVENTS ({regularEvents.length})</span>
+                      <div className="flex flex-wrap items-center gap-2 mb-3">
+                        <button
+                          onClick={() => setShowDevEvents(!showDevEvents)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all shadow-sm ${
+                            showDevEvents
+                              ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                              : 'bg-white hover:bg-gray-50 text-blue-600 border border-blue-300'
+                          }`}
+                        >
+                          <Code size={14} />
+                          <span>Contract Events (Developers)</span>
+                        </button>
+                        {coreMetricsEvents.length > 0 && (
+                          <button
+                            onClick={() => setShowMetrics(!showMetrics)}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all shadow-sm ${
+                              showMetrics
+                                ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                                : 'bg-white hover:bg-gray-50 text-amber-600 border border-amber-300'
+                            }`}
+                          >
+                            <TrendingUp size={14} />
+                            <span>Contract Metrics</span>
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setShowLedgerEffects(!showLedgerEffects)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all shadow-sm ${
+                            showLedgerEffects
+                              ? 'bg-green-600 hover:bg-green-700 text-white'
+                              : 'bg-white hover:bg-gray-50 text-green-600 border border-green-300'
+                          }`}
+                        >
+                          <Zap size={14} />
+                          <span>Ledger Effects</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Contract Events for Developers */}
+                  {regularEvents.length > 0 && showDevEvents && (
+                    <div className="bg-slate-900 p-3 rounded-lg border border-purple-400 shadow-lg">
+                      <div className="text-xs font-bold text-purple-300 mb-2 flex items-center gap-1.5">
+                        <Code size={14} />
+                        <span>CONTRACT EVENTS FOR DEVELOPERS ({regularEvents.length})</span>
                       </div>
                       <div className="space-y-2 max-h-96 overflow-y-auto">
                           {(() => {
@@ -931,17 +977,7 @@ export function OperationNodeComponent({ data }: OperationNodeProps) {
                             const usedIndices = new Set<number>();
 
                             // Debug: log all events to see structure
-                            console.log('=== All Regular Events ===', regularEvents.length, 'events');
                             regularEvents.forEach((e: any, idx: number) => {
-                              console.log(`[${idx}]`, {
-                                type: e.topics?.[0],
-                                topics_1_raw: e.topics?.[1],
-                                topics_1_decoded: e.topics?.[1] ? decodeContractId(e.topics[1]) : null,
-                                topics_2: e.topics?.[2],
-                                topics: e.topics,
-                                data: e.data,
-                                contractId: e.contractId
-                              });
                             });
 
                             for (let i = 0; i < regularEvents.length; i++) {
@@ -955,8 +991,6 @@ export function OperationNodeComponent({ data }: OperationNodeProps) {
                                 let returnEvent = null;
                                 let returnIndex = -1;
 
-                                console.log(`Looking for fn_return matching fn_call "${fnName}"`);
-
                                 // Track nesting depth to find the MATCHING fn_return
                                 let depth = 0;
                                 for (let j = i + 1; j < regularEvents.length; j++) {
@@ -964,23 +998,18 @@ export function OperationNodeComponent({ data }: OperationNodeProps) {
                                   const nextEvent = regularEvents[j];
                                   const nextType = nextEvent.topics?.[0];
 
-                                  console.log(`  Checking [${j}]: ${nextType}, fn: ${nextEvent.topics?.[1] || nextEvent.topics?.[2]}, depth: ${depth}`);
-
                                   if (nextType === 'fn_call') {
                                     // Nested call, increase depth
                                     depth++;
-                                    console.log(`    -> Nested fn_call, depth now: ${depth}`);
                                   } else if (nextType === 'fn_return') {
                                     if (depth === 0 && nextEvent.topics?.[1] === fnName) {
                                       // This is OUR return (at our depth level)
-                                      console.log(`  ✓ MATCH FOUND at depth 0!`);
                                       returnEvent = nextEvent;
                                       returnIndex = j;
                                       break;
                                     } else if (depth > 0) {
                                       // This is a return for a nested call
                                       depth--;
-                                      console.log(`    -> Nested fn_return, depth now: ${depth}`);
                                     }
                                   }
                                 }
@@ -988,8 +1017,6 @@ export function OperationNodeComponent({ data }: OperationNodeProps) {
                                 if (returnIndex !== -1) {
                                   usedIndices.add(returnIndex);
                                 }
-
-                                console.log(`Result: ${returnEvent ? 'PAIRED' : 'NO RETURN'}`);
                                 grouped.push({ call: event, return: returnEvent });
                               } else if (eventType !== 'fn_return') {
                                 // Only add non-fn_return events (fn_return should only appear paired)
@@ -1006,16 +1033,9 @@ export function OperationNodeComponent({ data }: OperationNodeProps) {
 
                                 const functionName = callEvent.topics?.[2];
                                 // Use the event's contractId directly - it's already correctly extracted by the API
-                                const contractAddress = callEvent.contractId && callEvent.contractId !== 'System'
+                                const contractAddress = callEvent.contractId && callEvent.contractId !== 'Unknown' && callEvent.contractId !== 'System'
                                   ? callEvent.contractId
                                   : data.contractId; // Fallback to operation contract
-
-                                console.log(`🎯 Displaying fn_call #${idx}:`, {
-                                  functionName,
-                                  'callEvent.contractId': callEvent.contractId,
-                                  'data.contractId': data.contractId,
-                                  'selected contractAddress': contractAddress
-                                });
                                 // The caller (invoking account/contract) is in data[0]
                                 const callerAddress = Array.isArray(callEvent.data) ? callEvent.data[0] : null;
                                 // All arguments start from data index 1 (skip the caller at index 0)
@@ -1140,10 +1160,10 @@ export function OperationNodeComponent({ data }: OperationNodeProps) {
                   )}
 
                   {/* Contract Metrics Box */}
-                  {coreMetricsEvents.length > 0 && (
-                    <div className="bg-amber-50 p-3 rounded-lg border border-amber-200">
+                  {coreMetricsEvents.length > 0 && showMetrics && (
+                    <div className="bg-amber-50 p-3 rounded-lg border border-amber-200 shadow-lg">
                       <div className="text-xs font-bold text-amber-700 mb-2 flex items-center gap-1.5">
-                        <span>📊</span>
+                        <TrendingUp size={14} />
                         <span>CONTRACT METRICS ({coreMetricsEvents.length})</span>
                       </div>
                       <div className="space-y-2 max-h-60 overflow-y-auto">
@@ -1168,10 +1188,10 @@ export function OperationNodeComponent({ data }: OperationNodeProps) {
             })()}
 
             {/* BOX: Ledger Effects */}
-            {(data.effects && data.effects.length > 0) || (data.stateChanges && data.stateChanges.length > 0) ? (
-              <div className="bg-green-50 p-3 rounded-lg border border-green-200">
+            {showLedgerEffects && ((data.effects && data.effects.length > 0) || (data.stateChanges && data.stateChanges.length > 0)) ? (
+              <div className="bg-green-50 p-3 rounded-lg border border-green-200 shadow-lg">
                 <div className="text-xs font-bold text-green-700 mb-2 flex items-center gap-1.5">
-                  <span>🟩</span>
+                  <Zap size={14} />
                   <span>LEDGER EFFECTS ({data.effects?.length || data.stateChanges?.length || 0})</span>
                 </div>
                 {data.effects && data.effects.length > 0 ? (
@@ -2445,6 +2465,7 @@ export function OperationNodeComponent({ data }: OperationNodeProps) {
         </div>
       </div>
       <Handle type="source" position={Position.Right} className="!bg-blue-400" />
+
     </div>
   );
 }

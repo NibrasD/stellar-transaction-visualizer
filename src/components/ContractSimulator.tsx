@@ -99,23 +99,18 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
       }
 
       // Convert arguments to ScVals with intelligent type detection
-      console.log('Parsed arguments:', parsedArgs);
       const scArgs = parsedArgs.map((arg, index) => {
-        console.log(`Processing arg ${index}:`, arg, `(type: ${typeof arg})`);
         try {
           if (typeof arg === 'string') {
             // Check if it's a Stellar address (account or contract)
             if (arg.match(/^G[A-Z0-9]{55}$/)) {
               // Stellar account address (public key)
-              console.log(`Detected Stellar account address at arg ${index}: ${arg}`);
               return StellarSdk.Address.fromString(arg).toScVal();
             } else if (arg.match(/^C[A-Z0-9]{55}$/)) {
               // Stellar contract address
-              console.log(`Detected Stellar contract address at arg ${index}: ${arg}`);
               return StellarSdk.Address.fromString(arg).toScVal();
             } else if (arg.match(/^-?\d+$/)) {
               // String containing only digits (large number as string)
-              console.log(`Detected numeric string at arg ${index}: ${arg}`);
               const bigNum = BigInt(arg);
 
               // Determine the appropriate type based on value and range
@@ -146,25 +141,19 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
             if (Number.isInteger(arg)) {
               if (arg >= 0 && arg <= 4294967295) {
                 // Fits in u32
-                console.log(`Converting to u32: ${arg}`);
                 return StellarSdk.nativeToScVal(arg, { type: 'u32' });
               } else if (arg >= 0 && arg <= Number.MAX_SAFE_INTEGER) {
                 // Positive, use i128 for better compatibility with token amounts
-                console.log(`Converting to i128 (from number): ${arg}`);
                 const scVal = StellarSdk.nativeToScVal(BigInt(arg), { type: 'i128' });
-                console.log('Created ScVal:', scVal);
                 return scVal;
               } else if (arg < 0 && arg >= -Number.MAX_SAFE_INTEGER) {
                 // Negative, use i128
-                console.log(`Converting to i128 (negative): ${arg}`);
                 return StellarSdk.nativeToScVal(BigInt(arg), { type: 'i128' });
               } else {
-                console.warn(`Number ${arg} may lose precision, use string format instead`);
                 return StellarSdk.nativeToScVal(BigInt(Math.floor(arg)), { type: 'i128' });
               }
             } else {
               // Floating point - try as string or error
-              console.warn(`Floating point number at arg ${index}, converting to string`);
               return StellarSdk.nativeToScVal(arg.toString());
             }
           } else if (typeof arg === 'boolean') {
@@ -180,7 +169,6 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
             return StellarSdk.nativeToScVal(arg);
           }
         } catch (conversionError: any) {
-          console.error(`Error converting argument ${index} (${stringifyWithBigInt(arg)}):`, conversionError);
           throw new Error(`Failed to convert argument ${index + 1}: ${conversionError.message}. Value: ${stringifyWithBigInt(arg)}`);
         }
       });
@@ -199,7 +187,6 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
         .build();
 
       // Simulate transaction to get auth and resource requirements
-      console.log('Starting simulation with transaction:', transaction);
       let simulation;
       try {
         simulation = await rpcServer.simulateTransaction(transaction);
@@ -221,8 +208,6 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
 
       if (StellarSdk.rpc.Api.isSimulationSuccess(simulation)) {
         // Log the entire simulation response to understand its structure
-        console.log('Full simulation response:', simulation);
-        console.log('Simulation keys:', Object.keys(simulation));
 
         // Extract result
         const resultValue = simulation.result?.retval;
@@ -245,64 +230,50 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
         let writeLedgerEntries = 0;
 
         // Log the entire simulation structure
-        console.log('Full simulation response:', simulation);
-        console.log('Simulation cost:', simulation.cost);
 
         // Extract from simulation.cost if available
         if (simulation.cost) {
           try {
             const cost = simulation.cost as any;
-            console.log('Cost object:', cost);
-            console.log('Cost keys:', Object.keys(cost));
 
             // CPU instructions
             if (cost.cpuInsns !== undefined) {
               cpuInstructions = Number(cost.cpuInsns);
-              console.log('CPU Instructions from cost.cpuInsns:', cpuInstructions);
             }
 
             // Memory bytes
             if (cost.memBytes !== undefined) {
               memoryBytes = Number(cost.memBytes);
-              console.log('Memory Bytes from cost.memBytes:', memoryBytes);
             }
           } catch (e: any) {
-            console.error('Failed to extract from cost:', e);
           }
         }
 
         // Try extracting from latestLedger if cost doesn't have the info
         if (cpuInstructions === 0 && simulation.latestLedger) {
-          console.log('Latest ledger:', simulation.latestLedger);
         }
 
         // Try extracting from transactionData (SorobanDataBuilder)
         if (simulation.transactionData) {
           try {
             const txData = simulation.transactionData as any;
-            console.log('Transaction Data type:', typeof txData);
-            console.log('Transaction Data:', txData);
 
             // Check if it has getResourceFee or resources method
             if (typeof txData.getResourceFee === 'function') {
-              console.log('Resource Fee:', txData.getResourceFee());
             }
 
             // Try to access internal data structure
             if (txData._data) {
               const data = txData._data;
-              console.log('Internal data:', data);
 
               if (data.resources) {
                 const resources = typeof data.resources === 'function' ? data.resources() : data.resources;
-                console.log('Resources:', resources);
 
                 // Extract instructions
                 if (resources.instructions) {
                   const instructions = typeof resources.instructions === 'function' ? resources.instructions() : resources.instructions;
                   if (cpuInstructions === 0) {
                     cpuInstructions = Number(instructions);
-                    console.log('CPU Instructions from resources:', cpuInstructions);
                   }
                 }
 
@@ -310,28 +281,24 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
                 if (resources.readBytes) {
                   const readBytes = typeof resources.readBytes === 'function' ? resources.readBytes() : resources.readBytes;
                   ledgerReadBytes = Number(readBytes);
-                  console.log('Read Bytes:', ledgerReadBytes);
                 }
 
                 // Extract write bytes
                 if (resources.writeBytes) {
                   const writeBytes = typeof resources.writeBytes === 'function' ? resources.writeBytes() : resources.writeBytes;
                   ledgerWriteBytes = Number(writeBytes);
-                  console.log('Write Bytes:', ledgerWriteBytes);
                 }
 
                 // Extract read ledger entries
                 if (resources.readLedgerEntries) {
                   const readEntries = typeof resources.readLedgerEntries === 'function' ? resources.readLedgerEntries() : resources.readLedgerEntries;
                   readLedgerEntries = Number(readEntries);
-                  console.log('Read Ledger Entries:', readLedgerEntries);
                 }
 
                 // Extract write ledger entries
                 if (resources.writeLedgerEntries) {
                   const writeEntries = typeof resources.writeLedgerEntries === 'function' ? resources.writeLedgerEntries() : resources.writeLedgerEntries;
                   writeLedgerEntries = Number(writeEntries);
-                  console.log('Write Ledger Entries:', writeLedgerEntries);
                 }
 
                 // If memoryBytes wasn't in cost, calculate from read+write
@@ -344,30 +311,24 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
             // Also try direct access to resources (newer SDK versions)
             if (typeof txData.resources === 'function') {
               const resources = txData.resources();
-              console.log('Direct resources access:', resources);
 
               if (resources.readLedgerEntries && typeof resources.readLedgerEntries === 'function') {
                 readLedgerEntries = Number(resources.readLedgerEntries());
-                console.log('Read Ledger Entries (direct):', readLedgerEntries);
               }
 
               if (resources.writeLedgerEntries && typeof resources.writeLedgerEntries === 'function') {
                 writeLedgerEntries = Number(resources.writeLedgerEntries());
-                console.log('Write Ledger Entries (direct):', writeLedgerEntries);
               }
 
               if (resources.readBytes && typeof resources.readBytes === 'function') {
                 ledgerReadBytes = Number(resources.readBytes());
-                console.log('Read Bytes (direct):', ledgerReadBytes);
               }
 
               if (resources.writeBytes && typeof resources.writeBytes === 'function') {
                 ledgerWriteBytes = Number(resources.writeBytes());
-                console.log('Write Bytes (direct):', ledgerWriteBytes);
               }
             }
           } catch (e: any) {
-            console.error('Failed to extract resource usage from transactionData:', e);
           }
         }
 
@@ -375,30 +336,22 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
         if (simulation.transactionData) {
           try {
             const txData = simulation.transactionData as any;
-            console.log('Transaction Data structure:', txData);
-            console.log('Transaction Data keys:', Object.keys(txData));
 
             // Try to access resources object
             if (txData._attributes) {
-              console.log('Transaction Data _attributes:', txData._attributes);
               const resources = txData._attributes.resources || txData._attributes.ext?.sorobanTransactionData?.resources;
 
               if (resources) {
-                console.log('Resources object:', resources);
-                console.log('Resources keys:', Object.keys(resources));
 
                 // Try accessing footprint for ledger entries
                 if (resources.footprint) {
-                  console.log('Footprint:', resources.footprint);
                   if (resources.footprint.readOnly) {
                     const readOnly = Array.isArray(resources.footprint.readOnly) ? resources.footprint.readOnly : [];
                     readLedgerEntries = readOnly.length;
-                    console.log('Read-only entries count:', readLedgerEntries);
                   }
                   if (resources.footprint.readWrite) {
                     const readWrite = Array.isArray(resources.footprint.readWrite) ? resources.footprint.readWrite : [];
                     writeLedgerEntries = readWrite.length;
-                    console.log('Read-write entries count:', writeLedgerEntries);
                   }
                 }
               }
@@ -406,42 +359,31 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
 
             // Try multiple access paths - check _data first
             if (txData._data) {
-              console.log('🔍 Accessing txData._data...');
-              console.log('🔍 txData._data type:', typeof txData._data);
 
               if (typeof txData._data.resources === 'function') {
-                console.log('✅ txData._data.resources is a function, calling it...');
                 const resources = txData._data.resources();
-                console.log('🔍 resources from _data:', resources);
 
                 if (typeof resources.readLedgerEntries === 'function') {
                   readLedgerEntries = Number(resources.readLedgerEntries());
-                  console.log(`✅ Read Ledger Entries from _data: ${readLedgerEntries}`);
                 }
                 if (typeof resources.writeLedgerEntries === 'function') {
                   writeLedgerEntries = Number(resources.writeLedgerEntries());
-                  console.log(`✅ Write Ledger Entries from _data: ${writeLedgerEntries}`);
                 }
 
                 // If not found, try footprint
                 if ((readLedgerEntries === 0 || writeLedgerEntries === 0) && typeof resources.footprint === 'function') {
-                  console.log('✅ Trying footprint from _data.resources...');
                   try {
                     const footprint = resources.footprint();
                     const readOnly = typeof footprint.readOnly === 'function' ? footprint.readOnly() : [];
                     const readWrite = typeof footprint.readWrite === 'function' ? footprint.readWrite() : [];
-                    console.log(`🔍 Footprint from _data - readOnly: ${readOnly.length}, readWrite: ${readWrite.length}`);
 
                     if (readLedgerEntries === 0) {
                       readLedgerEntries = readOnly.length + readWrite.length;
-                      console.log(`✅ Read Ledger Entries from _data footprint: ${readLedgerEntries}`);
                     }
                     if (writeLedgerEntries === 0) {
                       writeLedgerEntries = readWrite.length;
-                      console.log(`✅ Write Ledger Entries from _data footprint: ${writeLedgerEntries}`);
                     }
                   } catch (e) {
-                    console.warn('⚠️ Could not extract from _data footprint:', e);
                   }
                 }
               }
@@ -449,76 +391,45 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
 
             // Direct access fallback - using the same pattern as stellar.ts
             if (typeof txData.resources === 'function') {
-              console.log('🔍 txData.resources is a function, calling it...');
               const resources = txData.resources();
-              console.log('🔍 resources object:', resources);
-              console.log('🔍 resources.footprint type:', typeof resources.footprint);
 
               if (resources.readLedgerEntries && typeof resources.readLedgerEntries === 'function') {
                 readLedgerEntries = Number(resources.readLedgerEntries());
-                console.log(`✅ Read Ledger Entries (direct): ${readLedgerEntries}`);
               } else {
-                console.log('⚠️ resources.readLedgerEntries not available or not a function');
               }
 
               if (resources.writeLedgerEntries && typeof resources.writeLedgerEntries === 'function') {
                 writeLedgerEntries = Number(resources.writeLedgerEntries());
-                console.log(`✅ Write Ledger Entries (direct): ${writeLedgerEntries}`);
               } else {
-                console.log('⚠️ resources.writeLedgerEntries not available or not a function');
               }
 
               // If not found directly, try footprint
-              console.log(`🔍 Checking if we need footprint: readLedgerEntries=${readLedgerEntries}, writeLedgerEntries=${writeLedgerEntries}`);
               if ((readLedgerEntries === 0 || writeLedgerEntries === 0) && typeof resources.footprint === 'function') {
-                console.log('✅ resources.footprint is a function, attempting to extract...');
                 try {
                   const footprint = resources.footprint();
-                  console.log('🔍 footprint object:', footprint);
-                  console.log('🔍 footprint.readOnly type:', typeof footprint.readOnly);
-                  console.log('🔍 footprint.readWrite type:', typeof footprint.readWrite);
 
                   const readOnly = footprint.readOnly ? footprint.readOnly() : [];
                   const readWrite = footprint.readWrite ? footprint.readWrite() : [];
-                  console.log(`🔍 readOnly length: ${readOnly.length}, readWrite length: ${readWrite.length}`);
 
                   if (readLedgerEntries === 0) {
                     readLedgerEntries = readOnly.length + readWrite.length;
-                    console.log(`✅ Read Ledger Entries from footprint: ${readLedgerEntries} (${readOnly.length} read-only + ${readWrite.length} read-write)`);
                   }
 
                   if (writeLedgerEntries === 0) {
                     writeLedgerEntries = readWrite.length;
-                    console.log(`✅ Write Ledger Entries from footprint: ${writeLedgerEntries}`);
                   }
                 } catch (footprintError: any) {
-                  console.warn('⚠️ Could not extract from footprint:', footprintError.message);
-                  console.error('Stack:', footprintError.stack);
                 }
               } else {
-                console.log('⚠️ Footprint extraction skipped - either counts already set or footprint not available');
               }
             } else {
-              console.log('⚠️ txData.resources is not a function, type:', typeof txData.resources);
             }
           } catch (e) {
-            console.warn('Could not extract ledger entry counts:', e);
           }
         }
 
-        console.log('Final resource usage:', {
-          cpuInstructions,
-          memoryBytes,
-          ledgerReadBytes,
-          ledgerWriteBytes,
-          readLedgerEntries,
-          writeLedgerEntries
-        });
-
         // Extract events - handle the actual SDK structure
         const events = simulation.events?.map((eventWrapper: any, idx: number) => {
-          console.log(`Processing event ${idx}:`, eventWrapper);
-          console.log('Event wrapper keys:', Object.keys(eventWrapper));
           try {
             let decodedTopics: any[] = [];
             let decodedData: any = null;
@@ -526,14 +437,12 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
 
             // The actual event is in _attributes.event
             const event = eventWrapper._attributes?.event || eventWrapper.event || eventWrapper;
-            console.log('Actual event object:', event);
 
             // XDR objects have getter functions, so we need to call them
             // event.body is a getter function that returns the body object
             if (event.body && typeof event.body === 'function') {
               // Call the body() getter to get the actual body object
               const bodyObj = event.body();
-              console.log('Body object (from getter):', bodyObj);
 
               // Now check if bodyObj has v0() method or _value._attributes
               let v0Data = null;
@@ -550,15 +459,10 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
                 }
               }
 
-              console.log('v0 data attributes:', v0Data);
-
               if (v0Data) {
                 // Access topics and data directly from _attributes
                 const topics = v0Data.topics;
                 const data = v0Data.data;
-
-                console.log('Topics from v0:', topics);
-                console.log('Data from v0:', data);
 
                 // Decode topics
                 if (topics && Array.isArray(topics)) {
@@ -566,20 +470,16 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
                     try {
                       return StellarSdk.scValToNative(t);
                     } catch (e) {
-                      console.warn('Failed to decode topic:', e);
                       return null;
                     }
                   }).filter((t: any) => t !== null);
-                  console.log('Decoded topics:', decodedTopics);
                 }
 
                 // Decode data
                 if (data) {
                   try {
                     decodedData = StellarSdk.scValToNative(data);
-                    console.log('Decoded data:', decodedData);
                   } catch (e) {
-                    console.warn('Failed to decode data:', e);
                   }
                 }
               }
@@ -598,7 +498,6 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
               data: decodedData,
             };
           } catch (e) {
-            console.error('Failed to process event:', e);
             return {
               type: 'contract',
               topics: [],
@@ -703,7 +602,6 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
         });
       }
     } catch (error: any) {
-      console.error('Simulation error:', error);
       setResult({
         success: false,
         error: error.message || 'An unexpected error occurred',

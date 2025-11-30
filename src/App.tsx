@@ -8,12 +8,13 @@ import { SimulationPanel } from './components/SimulationPanel';
 import { TransactionDetailsPanel } from './components/TransactionDetails';
 import { ContractSimulator } from './components/ContractSimulator';
 import { TransactionEffects } from './components/TransactionEffects';
+import { ContractEventsFlow } from './components/ContractEventsFlow';
+import { UserOperationFlow } from './components/UserOperationFlow';
 import {
   fetchTransaction,
   createOperationNodes,
   createOperationEdges,
-  setNetwork,
-  simulateTransaction
+  setNetwork
 } from './services/stellar';
 import type { TransactionDetails, NetworkConfig } from './types/stellar';
 
@@ -39,27 +40,13 @@ function App() {
   const handleSearch = async (value: string) => {
     setIsLoading(true);
     setError(null);
-    console.log('Searching for transaction:', value);
 
     try {
       const txData = await fetchTransaction(value);
 
-      console.log('✅ Final transaction data:', txData);
-      console.log('🔍 Soroban operations count:', txData.sorobanOperations?.length || 0);
-      console.log('🔍 Has simulationResult:', !!txData.simulationResult);
-      console.log('🔍 Enhanced debug info:', txData.simulationResult?.enhancedDebugInfo);
-      console.log('🔍 Should show Soroban Debug Info tab:', (txData.sorobanOperations?.length || 0) > 0 && !!txData.simulationResult);
-
       setTransactions([txData]);
       setSelectedTransaction(txData);
     } catch (err: any) {
-      console.error('❌ Search error:', err);
-      console.error('Error details:', {
-        message: err.message,
-        response: err.response,
-        status: err.response?.status,
-        data: err.response?.data
-      });
 
       let errorMessage = 'Failed to fetch transaction data.';
 
@@ -153,7 +140,7 @@ function App() {
                       value="flow"
                       className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 border-b-2 border-transparent data-[state=active]:border-blue-600 data-[state=active]:text-blue-600"
                     >
-                      Operation Flow
+                      {selectedTransaction.sorobanOperations && selectedTransaction.sorobanOperations.length > 0 ? 'Developer Info' : 'Operation Flow'}
                     </Tabs.Trigger>
                     <Tabs.Trigger
                       value="effects"
@@ -161,6 +148,14 @@ function App() {
                     >
                       Effects ({selectedTransaction.effects?.length || 0})
                     </Tabs.Trigger>
+                    {selectedTransaction.sorobanOperations && selectedTransaction.sorobanOperations.length > 0 && (
+                      <Tabs.Trigger
+                        value="user-flow"
+                        className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 border-b-2 border-transparent data-[state=active]:border-blue-600 data-[state=active]:text-blue-600"
+                      >
+                        Operation Flow for Users
+                      </Tabs.Trigger>
+                    )}
                     {selectedTransaction.sorobanOperations && selectedTransaction.sorobanOperations.length > 0 && selectedTransaction.simulationResult && (
                       <Tabs.Trigger
                         value="simulation"
@@ -180,12 +175,15 @@ function App() {
 
                   <Tabs.Content value="flow">
                     <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
-                      <h2 className="text-xl font-semibold mb-4">Operation Flow</h2>
+                      <h2 className="text-xl font-semibold mb-4">
+                        {selectedTransaction.sorobanOperations && selectedTransaction.sorobanOperations.length > 0 ? 'Developer Info' : 'Operation Flow'}
+                      </h2>
                       <TransactionFlow
                         nodes={flowNodes}
                         edges={flowEdges}
                         effects={selectedTransaction.effects || []}
                         sorobanOperations={selectedTransaction.sorobanOperations || []}
+                        simulationResult={selectedTransaction.simulationResult}
                       />
                     </div>
                   </Tabs.Content>
@@ -195,6 +193,20 @@ function App() {
                       <TransactionEffects effects={selectedTransaction.effects || []} />
                     </div>
                   </Tabs.Content>
+
+                  {selectedTransaction.sorobanOperations && selectedTransaction.sorobanOperations.length > 0 && (
+                    <Tabs.Content value="user-flow">
+                      <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
+                        <h2 className="text-xl font-semibold mb-4">Operation Flow for Users</h2>
+                        <UserOperationFlow
+                          events={selectedTransaction.sorobanOperations[0]?.events || []}
+                          sourceAccount={selectedTransaction.sourceAccount}
+                          functionName={selectedTransaction.sorobanOperations[0]?.functionName}
+                          assetBalanceChanges={selectedTransaction.operations?.[0]?.asset_balance_changes || []}
+                        />
+                      </div>
+                    </Tabs.Content>
+                  )}
 
                   {selectedTransaction.sorobanOperations && selectedTransaction.sorobanOperations.length > 0 && selectedTransaction.simulationResult && (
                     <Tabs.Content value="simulation">

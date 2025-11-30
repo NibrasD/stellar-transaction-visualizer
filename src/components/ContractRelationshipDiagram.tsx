@@ -7,10 +7,8 @@ interface ContractRelationshipDiagramProps {
 }
 
 export function ContractRelationshipDiagram({ sorobanOperations }: ContractRelationshipDiagramProps) {
-  console.log('🎨 ContractRelationshipDiagram rendering with operations:', sorobanOperations);
 
   if (!sorobanOperations || sorobanOperations.length === 0) {
-    console.log('⚠️ No sorobanOperations provided to ContractRelationshipDiagram');
     return null;
   }
 
@@ -22,17 +20,11 @@ export function ContractRelationshipDiagram({ sorobanOperations }: ContractRelat
   }>();
 
   sorobanOperations.forEach((op, idx) => {
-    console.log(`🔍 Processing operation ${idx}:`, {
-      contractId: op.contractId,
-      functionName: op.functionName,
-      hasCrossContractCalls: !!op.crossContractCalls
-    });
 
     const contractId = op.contractId;
 
     // Skip operations without valid contract IDs
     if (!contractId || contractId === 'Unknown Contract' || contractId.startsWith('Non_Contract')) {
-      console.log(`⚠️ Skipping operation ${idx} - invalid contract ID:`, contractId);
       return;
     }
 
@@ -69,17 +61,6 @@ export function ContractRelationshipDiagram({ sorobanOperations }: ContractRelat
   const hasCrossContractCalls = contractList.some(([_, data]) =>
     data.calls.size > 0 || data.calledBy.size > 0
   );
-
-  console.log('📊 Contract summary:', {
-    totalContracts: contractList.length,
-    hasCrossContractCalls,
-    contracts: contractList.map(([id, data]) => ({
-      id: id.substring(0, 10),
-      functions: Array.from(data.functions),
-      calls: Array.from(data.calls).length,
-      calledBy: Array.from(data.calledBy).length
-    }))
-  });
 
   // If no valid contracts found, show a message
   if (contractList.length === 0) {
