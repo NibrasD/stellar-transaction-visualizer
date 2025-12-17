@@ -1,3 +1,26 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Enable text selection in ReactFlow nodes while allowing panning */
+.react-flow__node {
+  pointer-events: all !important;
+}
+
+/* Enable text selection only on text elements, not the entire node */
+.react-flow__node p,
+.react-flow__node span,
+.react-flow__node div:not([class*="handle"]),
+.react-flow__node code,
+.react-flow__node pre {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  cursor: text !important;
+}
+
+/* Allow clicking through the node wrapper for panning */
+.react-flow__node > div {
+  pointer-events: auto;
+}

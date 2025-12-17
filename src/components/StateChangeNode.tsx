@@ -3,6 +3,7 @@ import { Database, Plus, Edit, Trash2 } from 'lucide-react';
 import type { NodeProps } from 'reactflow';
 import { StateChange } from '../types/stellar';
 import * as StellarSdk from '@stellar/stellar-sdk';
+import { formatContractValue } from '../services/stellar';
 
 interface StateChangeNodeData {
   stateChange: StateChange;
@@ -64,8 +65,22 @@ export function StateChangeNode({ data }: NodeProps<StateChangeNodeData>) {
           }
         }
       }
+
+      // Keep FULL base64 for decoding
       const b64 = btoa(String.fromCharCode(...Array.from(bytes)));
-      return b64.length > 32 ? `${b64.substring(0, 16)}…${b64.substring(b64.length - 8)}bytes` : `${b64}bytes`;
+      const fullBytesStr = `${b64}bytes`;
+
+      // Try to decode using the FULL base64 string
+      const formatted = formatContractValue(fullBytesStr);
+
+      // If successfully decoded to text, return it
+      if (formatted !== fullBytesStr && !formatted.startsWith('0x')) {
+        return formatted;
+      }
+
+      // If not decoded (still in base64), truncate for display
+      const displayStr = b64.length > 32 ? `${b64.substring(0, 16)}…${b64.substring(b64.length - 8)}bytes` : `${b64}bytes`;
+      return displayStr;
     }
 
     if (typeof val === 'string') {
@@ -76,11 +91,15 @@ export function StateChangeNode({ data }: NodeProps<StateChangeNodeData>) {
     }
 
     if (typeof val === 'number') {
-      return `${val}u32`;
+      // Determine appropriate type based on value size
+      const type = val <= 4294967295 ? 'u32' : 'u64';
+      const formatted = `${val}${type}`;
+      return formatContractValue(formatted);
     }
 
     if (typeof val === 'bigint') {
-      return `${val}i128`;
+      const formatted = `${val}i128`;
+      return formatContractValue(formatted);
     }
 
     if (typeof val === 'boolean') {

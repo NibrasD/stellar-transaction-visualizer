@@ -36,8 +36,8 @@ interface TransactionFlowProps {
 }
 
 function TransactionFlowInner({ nodes, edges, effects = [], sorobanOperations = [], simulationResult }: TransactionFlowProps) {
-  const [layoutMode, setLayoutMode] = useState<'horizontal' | 'staggered'>('staggered');
-  const [showConnections, setShowConnections] = useState(true);
+  const [layoutMode, setLayoutMode] = useState<'horizontal' | 'staggered' | 'vertical'>('horizontal');
+  const [showConnections, setShowConnections] = useState(false);
   const [executionStep, setExecutionStep] = useState(-1);
   const [isPlaying, setIsPlaying] = useState(false);
   const [executionSpeed, setExecutionSpeed] = useState(1000);
@@ -45,8 +45,9 @@ function TransactionFlowInner({ nodes, edges, effects = [], sorobanOperations = 
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      fitView({ padding: 0.2, maxZoom: 1, minZoom: 0.3, duration: 200 });
-    }, 50);
+      // Allow more zoom out to prevent nodes from being compressed and overlapping
+      fitView({ padding: 0.2, maxZoom: 1.5, minZoom: 0.3, duration: 0 });
+    }, 100);
     return () => clearTimeout(timer);
   }, [nodes.length, layoutMode, fitView]);
 
@@ -54,7 +55,11 @@ function TransactionFlowInner({ nodes, edges, effects = [], sorobanOperations = 
   }, []);
 
   const handleLayoutChange = () => {
-    setLayoutMode(prev => prev === 'horizontal' ? 'staggered' : 'horizontal');
+    setLayoutMode(prev => {
+      if (prev === 'horizontal') return 'staggered';
+      if (prev === 'staggered') return 'vertical';
+      return 'horizontal';
+    });
   };
 
   const handlePlayPause = () => {
@@ -93,6 +98,11 @@ function TransactionFlowInner({ nodes, edges, effects = [], sorobanOperations = 
   }, [isPlaying, executionStep, nodes.length, executionSpeed]);
 
   const adjustedNodes = React.useMemo(() => {
+    // Hide nodes in vertical and staggered views
+    if (layoutMode === 'vertical' || layoutMode === 'staggered') {
+      return [];
+    }
+
     // Build a tree structure from diagnostic logs if available
     const buildHierarchicalLayout = () => {
       // Check if we have simulation results with diagnostic logs
@@ -117,16 +127,17 @@ function TransactionFlowInner({ nodes, edges, effects = [], sorobanOperations = 
 
       logs.forEach((log: string, idx: number) => {
         // Match: "Invoked contract CDLZ...IGWA harvest(GDTL...YZFE, 102954u32) → 13049517i128"
-        const invokeMatch = log.match(/^( *)Invoked contract ([A-Z0-9]{4})…([A-Z0-9]{4}) ([a-zA-Z_]+)\(([^)]*)\)( → (.+))?/);
+        // Also match full contract IDs like "CATR...UMKI" or "CATRUMKI..."
+        const invokeMatch = log.match(/^( *)Invoked contract ([A-Z0-9]{4,56})[.…]+([A-Z0-9]{4}) ([a-zA-Z_]+)\(([^)]*)\)( → (.+))?/);
 
         // Match: "GD3I...5QZS invoked contract CBGS...KKY3 harvest(...) → [...]"
-        const topLevelMatch = log.match(/^([A-Z0-9]{4})…([A-Z0-9]{4}) invoked contract ([A-Z0-9]{4})…([A-Z0-9]{4}) ([a-zA-Z_]+)\(([^)]*)\)( → (.+))?/);
+        const topLevelMatch = log.match(/^([A-Z0-9]{4,56})[.…]+([A-Z0-9]{4}) invoked contract ([A-Z0-9]{4,56})[.…]+([A-Z0-9]{4}) ([a-zA-Z_]+)\(([^)]*)\)( → (.+))?/);
 
-        // Match minted/credited effects: "1.3049517 KALE... minted" or "11.7302525 KALE... credited to account GDTL...YZFE"
-        const effectMatch = log.match(/^ *([0-9.]+) ([A-Z]+)[^ ]* (minted|credited|transferred|burned)/);
+        // Match minted/credited effects: "78.4416776 XLMstellar.org credited to contract CATR…UMKI"
+        const effectMatch = log.match(/^ *([0-9.]+) ([A-Z]+[a-z.]*)[^ ]* (minted|credited|transferred|burned)/);
 
-        // Match events: "Contract CB23...OUOV raised event [...] with data ..."
-        const eventMatch = log.match(/^ *Contract ([A-Z0-9]{4})…([A-Z0-9]{4}) raised event/);
+        // Match events: "Contract CAS3...OWMA raised event [...] with data ..."
+        const eventMatch = log.match(/^ *Contract ([A-Z0-9]{4,56})[.…]+([A-Z0-9]{4}) raised event/);
 
         if (topLevelMatch) {
           // Top-level invocation
@@ -184,8 +195,8 @@ function TransactionFlowInner({ nodes, edges, effects = [], sorobanOperations = 
     if (hierarchy && hierarchy.length > 0) {
       const nodeWidth = 320;
       const nodeHeight = 140;
-      const horizontalGap = 80;
-      const levelHeight = 200;
+      const verticalGap = 70;
+      const levelWidth = 1000;
 
       // Group by level
       const levels: typeof hierarchy[] = [];
@@ -194,21 +205,21 @@ function TransactionFlowInner({ nodes, edges, effects = [], sorobanOperations = 
         levels[call.level].push(call);
       });
 
-      // Calculate total width needed for each level
-      const levelWidths = levels.map(level => level ? level.length * (nodeWidth + horizontalGap) : 0);
-      const maxWidth = Math.max(...levelWidths);
+      // Calculate total height needed for each level
+      const levelHeights = levels.map(level => level ? level.length * (nodeHeight + verticalGap) : 0);
+      const maxHeight = Math.max(...levelHeights);
 
-      // Position nodes
+      // Position nodes HORIZONTALLY (x increases with level, y for position within level)
       const layoutNodes = hierarchy.map((call, index) => {
         const levelNodes = levels[call.level];
         const posInLevel = levelNodes.indexOf(call);
         const totalInLevel = levelNodes.length;
-        const levelWidth = totalInLevel * (nodeWidth + horizontalGap);
+        const levelHeight = totalInLevel * (nodeHeight + verticalGap);
 
-        // Center the level horizontally
-        const levelStartX = (maxWidth - levelWidth) / 2;
-        const xPos = levelStartX + posInLevel * (nodeWidth + horizontalGap) + nodeWidth / 2;
-        const yPos = call.level * levelHeight + 100;
+        // Center the level vertically
+        const levelStartY = (maxHeight - levelHeight) / 2;
+        const yPos = levelStartY + posInLevel * (nodeHeight + verticalGap) + nodeHeight / 2;
+        const xPos = call.level * levelWidth + 100;
 
         const isExecuted = index <= executionStep;
         const isExecuting = index === executionStep;
@@ -237,9 +248,175 @@ function TransactionFlowInner({ nodes, edges, effects = [], sorobanOperations = 
       return layoutNodes;
     }
 
-    // Fallback to original linear layout
-    let horizontalOffset = 0;
+    // VERTICAL VIEW MODE - Smart grouping and layout
+    if (layoutMode === 'vertical') {
+      const NODE_HEIGHT = 180;
+      const VERTICAL_GAP = 100;
+      const COLUMN_WIDTH = 550;
 
+      // Better grouping: only group with PREVIOUS operation if they share accounts/assets
+      // This prevents transitive grouping and maintains chronological order
+      interface NodeWithGroup {
+        node: typeof nodes[0];
+        groupIndex: number;
+        originalIndex: number;
+      }
+
+      const nodesWithGroups: NodeWithGroup[] = [];
+      let currentGroup = 0;
+
+      nodes.forEach((node, index) => {
+        const opData = node.data;
+
+        // Extract current operation's accounts and assets
+        const currentAccounts = new Set<string>();
+        const currentAssets = new Set<string>();
+
+        if (opData.source_account) currentAccounts.add(opData.source_account);
+        if (opData.from) currentAccounts.add(opData.from);
+        if (opData.to || opData.destination) currentAccounts.add(opData.to || opData.destination);
+        if (opData.account) currentAccounts.add(opData.account);
+
+        if (opData.asset_type) currentAssets.add(`${opData.asset_code || 'XLM'}-${opData.asset_issuer || 'native'}`);
+        if (opData.source_asset_type) currentAssets.add(`${opData.source_asset_code || 'XLM'}-${opData.source_asset_issuer || 'native'}`);
+        if (opData.destination_asset_type) currentAssets.add(`${opData.destination_asset_code || 'XLM'}-${opData.destination_asset_issuer || 'native'}`);
+
+        // Check if this operation shares accounts/assets with the PREVIOUS operation only
+        let shouldStartNewGroup = true;
+
+        if (index > 0) {
+          const prevNodeWithGroup = nodesWithGroups[index - 1];
+          const prevData = prevNodeWithGroup.node.data;
+
+          const prevAccounts = new Set<string>();
+          const prevAssets = new Set<string>();
+
+          if (prevData.source_account) prevAccounts.add(prevData.source_account);
+          if (prevData.from) prevAccounts.add(prevData.from);
+          if (prevData.to || prevData.destination) prevAccounts.add(prevData.to || prevData.destination);
+          if (prevData.account) prevAccounts.add(prevData.account);
+
+          if (prevData.asset_type) prevAssets.add(`${prevData.asset_code || 'XLM'}-${prevData.asset_issuer || 'native'}`);
+          if (prevData.source_asset_type) prevAssets.add(`${prevData.source_asset_code || 'XLM'}-${prevData.source_asset_issuer || 'native'}`);
+          if (prevData.destination_asset_type) prevAssets.add(`${prevData.destination_asset_code || 'XLM'}-${prevData.destination_asset_issuer || 'native'}`);
+
+          // Check for overlap
+          const hasCommonAccount = Array.from(currentAccounts).some(acc => prevAccounts.has(acc));
+          const hasCommonAsset = Array.from(currentAssets).some(asset => prevAssets.has(asset));
+
+          if (hasCommonAccount || hasCommonAsset) {
+            shouldStartNewGroup = false;
+          }
+        }
+
+        if (shouldStartNewGroup && index > 0) {
+          currentGroup++;
+        }
+
+        nodesWithGroups.push({
+          node,
+          groupIndex: currentGroup,
+          originalIndex: index,
+        });
+      });
+
+      // Count nodes per group
+      const groupCounts = new Map<number, number>();
+      nodesWithGroups.forEach(nwg => {
+        groupCounts.set(nwg.groupIndex, (groupCounts.get(nwg.groupIndex) || 0) + 1);
+      });
+
+      // Position all nodes maintaining chronological order within each group
+      const layoutNodes: any[] = [];
+      const groupNodeCounts = new Map<number, number>();
+
+      nodesWithGroups.forEach(({ node, groupIndex, originalIndex }) => {
+        const isExecuted = originalIndex <= executionStep;
+        const isExecuting = originalIndex === executionStep;
+        const isPending = originalIndex > executionStep && executionStep !== -1;
+
+        let executionState: 'pending' | 'executing' | 'completed' | 'failed' | undefined = undefined;
+        if (executionStep !== -1) {
+          if (isExecuting) {
+            executionState = 'executing';
+          } else if (isExecuted) {
+            const operationSuccess = node.data?.operation?.transaction_successful !== false;
+            executionState = operationSuccess ? 'completed' : 'failed';
+          } else if (isPending) {
+            executionState = 'pending';
+          }
+        }
+
+        // Calculate position
+        const nodeIndexInGroup = groupNodeCounts.get(groupIndex) || 0;
+        groupNodeCounts.set(groupIndex, nodeIndexInGroup + 1);
+
+        const xPos = groupIndex * COLUMN_WIDTH + 100;
+        const yPos = nodeIndexInGroup * (NODE_HEIGHT + VERTICAL_GAP) + 150;
+
+        layoutNodes.push({
+          ...node,
+          position: { x: xPos, y: yPos },
+          data: {
+            ...node.data,
+            executionState,
+            isExecuting,
+            groupIndex,
+            originalIndex,
+          },
+          style: {
+            opacity: executionStep === -1 ? 1 : (isExecuted ? 1 : 0.3),
+            transition: 'all 0.3s ease-in-out',
+          },
+        });
+      });
+
+      // Add group headers
+      const groupHeaders: any[] = [];
+      groupCounts.forEach((count, groupIndex) => {
+        const groupNodes = nodesWithGroups.filter(nwg => nwg.groupIndex === groupIndex);
+        let groupLabel = `Flow ${groupIndex + 1}`;
+
+        // Determine label from first operation
+        if (groupNodes.length > 0) {
+          const firstNode = groupNodes[0].node;
+          const nodeType = firstNode.data.type?.replace(/_/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase());
+          if (count === 1) {
+            groupLabel = nodeType || groupLabel;
+          } else {
+            groupLabel = `${nodeType} + ${count - 1} more`;
+          }
+        }
+
+        groupHeaders.push({
+          id: `group-header-${groupIndex}`,
+          type: 'default',
+          position: { x: groupIndex * COLUMN_WIDTH + 100, y: 50 },
+          data: {
+            label: groupLabel,
+          },
+          style: {
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            color: 'white',
+            border: '2px solid #5a67d8',
+            borderRadius: '8px',
+            padding: '10px 16px',
+            fontSize: '12px',
+            fontWeight: 600,
+            width: 'auto',
+            minWidth: '140px',
+            textAlign: 'center',
+            boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+          },
+          draggable: false,
+          selectable: false,
+        });
+      });
+
+      return [...groupHeaders, ...layoutNodes];
+    }
+
+    // HORIZONTAL AND STAGGERED VIEWS - preserve positions from createOperationNodes
     return nodes.map((node, index) => {
       const isExecuted = index <= executionStep;
       const isExecuting = index === executionStep;
@@ -257,24 +434,16 @@ function TransactionFlowInner({ nodes, edges, effects = [], sorobanOperations = 
         }
       }
 
-      let newPosition;
-      if (node.type === 'stateChange') {
-        const xPos = horizontalOffset * 420;
-        newPosition = layoutMode === 'horizontal'
-          ? { x: xPos, y: 380 }
-          : { x: xPos, y: 330 };
-        horizontalOffset++;
-      } else {
-        const xPos = horizontalOffset * 420;
-        newPosition = layoutMode === 'horizontal'
-          ? { x: xPos, y: 50 }
-          : { x: xPos, y: 50 };
-        horizontalOffset++;
-      }
+      // Apply layout mode: horizontal = same Y, staggered = alternate Y positions
+      // Keep original X position from stellar.ts, only override Y for horizontal alignment
+      // Always use Y=50 to ensure perfect horizontal alignment
+      const position = layoutMode === 'horizontal'
+        ? { x: node.position.x, y: 50 }
+        : { x: node.position.x, y: index % 2 === 0 ? 50 : 200 };
 
       return {
         ...node,
-        position: newPosition,
+        position,
         data: {
           ...node.data,
           executionState,
@@ -290,6 +459,56 @@ function TransactionFlowInner({ nodes, edges, effects = [], sorobanOperations = 
 
   const adjustedEdges = React.useMemo(() => {
     if (!showConnections) return [];
+
+    // VERTICAL VIEW - Smart edge generation
+    if (layoutMode === 'vertical') {
+      const verticalEdges: Edge[] = [];
+
+      // Filter out header nodes
+      const operationNodes = adjustedNodes.filter(n => !n.id.startsWith('group-header'));
+
+      // Sort by original index to maintain chronological order
+      const sortedNodes = [...operationNodes].sort((a, b) => {
+        const aIndex = a.data.originalIndex ?? 0;
+        const bIndex = b.data.originalIndex ?? 0;
+        return aIndex - bIndex;
+      });
+
+      // Connect operations in chronological order
+      for (let i = 0; i < sortedNodes.length - 1; i++) {
+        const sourceNode = sortedNodes[i];
+        const targetNode = sortedNodes[i + 1];
+        const sourceIndex = sourceNode.data.originalIndex ?? 0;
+        const isActive = sourceIndex <= executionStep;
+
+        const sourceGroup = sourceNode.data.groupIndex ?? 0;
+        const targetGroup = targetNode.data.groupIndex ?? 0;
+        const isSameGroup = sourceGroup === targetGroup;
+
+        verticalEdges.push({
+          id: `edge-${sourceNode.id}-${targetNode.id}`,
+          source: sourceNode.id,
+          target: targetNode.id,
+          type: isSameGroup ? 'smoothstep' : 'default',
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            width: 20,
+            height: 20,
+            color: isActive ? (isSameGroup ? '#10b981' : '#f59e0b') : (isSameGroup ? '#3b82f6' : '#6366f1'),
+          },
+          style: {
+            stroke: isActive ? (isSameGroup ? '#10b981' : '#f59e0b') : (isSameGroup ? '#3b82f6' : '#6366f1'),
+            strokeWidth: isActive ? (isSameGroup ? 3 : 2.5) : (isSameGroup ? 2 : 1.5),
+            strokeDasharray: isSameGroup ? '0' : '5,5',
+            opacity: executionStep === -1 ? (isSameGroup ? 1 : 0.6) : (isActive ? (isSameGroup ? 1 : 0.8) : 0.3),
+            transition: 'all 0.3s ease-in-out',
+          },
+          animated: isActive && isSameGroup,
+        });
+      }
+
+      return verticalEdges;
+    }
 
     // Check if we're using hierarchical layout
     const isHierarchical = adjustedNodes.some(n => n.data.level !== undefined);
@@ -323,7 +542,7 @@ function TransactionFlowInner({ nodes, edges, effects = [], sorobanOperations = 
               id: `edge-${parentNode.id}-${childNode.id}`,
               source: parentNode.id,
               target: childNode.id,
-              type: 'smoothstep',
+              type: 'straight',
               markerEnd: {
                 type: MarkerType.ArrowClosed,
                 width: 25,
@@ -351,7 +570,10 @@ function TransactionFlowInner({ nodes, edges, effects = [], sorobanOperations = 
       const isActive = sourceIndex <= executionStep;
 
       return {
-        ...edge,
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        type: 'straight',
         markerEnd: {
           type: MarkerType.ArrowClosed,
           width: 25,
@@ -359,7 +581,6 @@ function TransactionFlowInner({ nodes, edges, effects = [], sorobanOperations = 
           color: isActive ? '#10b981' : '#2563eb',
         },
         style: {
-          ...edge.style,
           stroke: isActive ? '#10b981' : '#2563eb',
           strokeWidth: isActive ? 4 : 3,
           opacity: executionStep === -1 ? 1 : (isActive ? 1 : 0.3),
@@ -406,33 +627,26 @@ function TransactionFlowInner({ nodes, edges, effects = [], sorobanOperations = 
     <div className="space-y-4">
       {/* Operation Flow Diagram */}
       <div className="w-full h-[800px] bg-gray-50 rounded-lg overflow-hidden border border-gray-100 relative">
-      <div className="absolute top-4 left-4 z-10 flex flex-col gap-3">
-        <div className="flex gap-2">
-          <button
-            onClick={handleLayoutChange}
-            className="px-3 py-1 bg-white rounded-md shadow-sm border border-gray-200 text-sm font-medium hover:bg-gray-50"
-          >
-            {layoutMode === 'horizontal' ? 'Staggered View' : 'Horizontal View'}
-          </button>
-          <button
-            onClick={() => setShowConnections(!showConnections)}
-            className="px-3 py-1 bg-white rounded-md shadow-sm border border-gray-200 text-sm font-medium hover:bg-gray-50"
-          >
-            {showConnections ? 'Hide Arrows' : 'Show Arrows'}
-          </button>
-        </div>
-
+      <div className="absolute top-4 left-4 z-10">
+        <button
+          onClick={() => setShowConnections(!showConnections)}
+          className="px-3 py-1.5 bg-white rounded-md shadow-sm border border-gray-200 text-sm font-medium hover:bg-gray-50"
+        >
+          {showConnections ? 'Hide Arrows' : 'Show Arrows'}
+        </button>
       </div>
       <ReactFlow
         nodes={adjustedNodes}
         edges={adjustedEdges}
         nodeTypes={nodeTypes}
         onConnect={onConnect}
-        fitView
-        fitViewOptions={{ padding: 0.2, maxZoom: 0.8, minZoom: 0.1 }}
+        fitView={true}
+        fitViewOptions={{ padding: 0.2, maxZoom: 1.5, minZoom: 0.3 }}
+        defaultViewport={{ x: 0, y: 0, zoom: 0.5 }}
         className="bg-gray-50"
         proOptions={{ hideAttribution: true }}
         defaultEdgeOptions={{
+          type: 'straight',
           style: { stroke: '#2563eb', strokeWidth: 3 },
           animated: true,
           markerEnd: {
@@ -445,11 +659,14 @@ function TransactionFlowInner({ nodes, edges, effects = [], sorobanOperations = 
         nodesDraggable={true}
         nodesConnectable={false}
         elementsSelectable={true}
+        panOnDrag={true}
+        panOnScroll={true}
+        zoomOnScroll={true}
         minZoom={0.1}
         maxZoom={2}
       >
         <Background color="#e2e8f0" gap={16} />
-        <Controls className="bg-white shadow-md border border-gray-100" />
+        <Controls className="bg-white shadow-md border border-gray-100" showFitView={true} showInteractive={false} />
         <MiniMap 
           className="bg-white border border-gray-200 rounded"
           nodeColor="#3b82f6"

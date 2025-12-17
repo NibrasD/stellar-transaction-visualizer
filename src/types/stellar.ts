@@ -16,9 +16,11 @@ export interface TransactionDetails {
   sorobanOperations?: SorobanOperation[];
   events?: ContractEvent[];
   effects?: TransactionEffect[];
+  allStateChanges?: StateChange[]; // All ledger changes (including trustlines) from all operations
   ledgerTimestamp: number;
   debugInfo?: TransactionDebugInfo;
   crossContractCalls?: CrossContractCall[];
+  contractInvocations?: ContractInvocation[];
 }
 
 export interface OperationNode {
@@ -107,6 +109,20 @@ export interface CrossContractCall {
   success: boolean;
 }
 
+export interface ContractInvocation {
+  id: string;
+  depth: number;
+  invoker: string;
+  invokerType: 'account' | 'contract';
+  contractId: string;
+  functionName: string;
+  parameters: any[];
+  returnValue?: any;
+  children: ContractInvocation[];
+  events: ContractEvent[];
+  success: boolean;
+}
+
 export interface ResourceUsage {
   refundableFee?: number;
   nonRefundableFee?: number;
@@ -123,8 +139,14 @@ export interface StateChange {
   key?: any;
   keyDisplay?: string;
   before?: any;
+  beforeDisplay?: string;
   after?: any;
+  afterDisplay?: string;
   value?: any;
+  valueDisplay?: string;
+  data?: any; // Additional data specific to the entry type (e.g., trustline balance, asset info)
+  operationIndex?: number;
+  functionName?: string;
 }
 
 export interface TtlExtension {

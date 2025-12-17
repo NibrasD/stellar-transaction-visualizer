@@ -1,6 +1,7 @@
 import React from 'react';
 import { TrendingUp, TrendingDown, Plus, Minus, DollarSign } from 'lucide-react';
 import type { NodeProps } from 'reactflow';
+import { CopyButton } from './CopyButton';
 
 interface EffectNodeData {
   effect: any;
@@ -127,9 +128,15 @@ export function EffectNode({ data }: NodeProps<EffectNodeData>) {
       {details.length > 0 && (
         <div className="space-y-1.5 text-sm">
           {details.map((detail, idx) => (
-            <div key={idx}>
-              <span className="text-gray-600">{detail.label}:</span>{' '}
-              <span className="font-mono font-medium text-gray-900">{detail.value}</span>
+            <div key={idx} className="flex items-center justify-between gap-2">
+              <div className="flex-1 min-w-0">
+                <span className="text-gray-600">{detail.label}:</span>{' '}
+                <span className="font-mono font-medium text-gray-900 select-all cursor-pointer hover:bg-gray-50 transition-colors">{detail.value}</span>
+              </div>
+              <CopyButton
+                text={detail.label === 'Account' || detail.label === 'From' || detail.label === 'To' ? effect[detail.label.toLowerCase()] : detail.value}
+                label={`Copy ${detail.label.toLowerCase()}`}
+              />
             </div>
           ))}
         </div>

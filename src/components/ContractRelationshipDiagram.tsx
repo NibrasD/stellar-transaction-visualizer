@@ -1,5 +1,6 @@
 import React from 'react';
 import { Network, GitBranch, Database, Code, Zap } from 'lucide-react';
+import * as StellarSdk from '@stellar/stellar-sdk';
 import type { SorobanOperation } from '../types/stellar';
 
 interface ContractRelationshipDiagramProps {
@@ -92,6 +93,58 @@ export function ContractRelationshipDiagram({ sorobanOperations }: ContractRelat
     return `${id.substring(0, 4)}...${id.substring(id.length - 4)}`;
   };
 
+  const decodeBase64Value = (value: any): string => {
+    if (!value || typeof value !== 'string') {
+      return String(value || '');
+    }
+
+    if (value.includes('=') && /^[A-Za-z0-9+/]+=*$/.test(value)) {
+      try {
+        const binaryString = atob(value);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        if (bytes.length === 32) {
+          try {
+            return StellarSdk.StrKey.encodeContract(bytes);
+          } catch {
+            try {
+              return StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+            } catch {}
+          }
+        }
+
+        let text = '';
+        let isPrintable = true;
+        for (let i = 0; i < bytes.length; i++) {
+          const char = bytes[i];
+          if ((char >= 32 && char <= 126) || char === 9 || char === 10 || char === 13) {
+            text += String.fromCharCode(char);
+          } else {
+            isPrintable = false;
+            break;
+          }
+        }
+
+        if (isPrintable && text.length > 0) {
+          return text;
+        }
+
+        if (bytes.length <= 8) {
+          let num = BigInt(0);
+          for (let i = 0; i < bytes.length; i++) {
+            num = (num << BigInt(8)) | BigInt(bytes[i]);
+          }
+          return num.toString();
+        }
+      } catch {}
+    }
+
+    return value;
+  };
+
   const formatValue = (val: any): string => {
     if (val === null || val === undefined) return '';
     if (typeof val === 'bigint') return val.toString();
@@ -99,10 +152,11 @@ export function ContractRelationshipDiagram({ sorobanOperations }: ContractRelat
       return val.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
     }
     if (typeof val === 'string') {
-      if (val.length > 20 && (val.startsWith('G') || val.startsWith('C'))) {
-        return formatAccountId(val);
+      const decoded = decodeBase64Value(val);
+      if (decoded.length > 20 && (decoded.startsWith('G') || decoded.startsWith('C'))) {
+        return formatAccountId(decoded);
       }
-      return val;
+      return decoded;
     }
     if (typeof val === 'object') {
       return JSON.stringify(val);

@@ -149,8 +149,8 @@ function ContractEventFlowInner({ events, onClose }: ContractEventFlowProps) {
     const callStack: { id: string; depth: number }[] = [];
     let currentDepth = 0;
     let xOffset = 0;
-    const X_SPACING = 350;
-    const Y_SPACING = 150;
+    const X_SPACING = 80;
+    const Y_SPACING = 80;
 
     events.forEach((event, index) => {
       const eventType = event.topics?.[0] || 'unknown';
@@ -174,7 +174,7 @@ function ContractEventFlowInner({ events, onClose }: ContractEventFlowProps) {
             id: `edge-${prevId}-${nodeId}`,
             source: prevId,
             target: nodeId,
-            type: 'smoothstep',
+            type: 'straight',
             animated: true,
             style: { stroke: '#3b82f6', strokeWidth: 2 },
             markerEnd: { type: MarkerType.ArrowClosed, color: '#3b82f6' },
@@ -209,7 +209,7 @@ function ContractEventFlowInner({ events, onClose }: ContractEventFlowProps) {
             id: `edge-${callInfo.id}-${nodeId}`,
             source: callInfo.id,
             target: nodeId,
-            type: 'smoothstep',
+            type: 'straight',
             animated: true,
             style: { stroke: '#10b981', strokeWidth: 2 },
             markerEnd: { type: MarkerType.ArrowClosed, color: '#10b981' },
@@ -220,7 +220,7 @@ function ContractEventFlowInner({ events, onClose }: ContractEventFlowProps) {
             id: `edge-${prevId}-${nodeId}`,
             source: prevId,
             target: nodeId,
-            type: 'smoothstep',
+            type: 'straight',
             animated: true,
             style: { stroke: '#10b981', strokeWidth: 2 },
             markerEnd: { type: MarkerType.ArrowClosed, color: '#10b981' },
@@ -247,7 +247,7 @@ function ContractEventFlowInner({ events, onClose }: ContractEventFlowProps) {
             id: `edge-${prevId}-${nodeId}`,
             source: prevId,
             target: nodeId,
-            type: 'smoothstep',
+            type: 'straight',
             animated: true,
             style: { stroke: '#8b5cf6', strokeWidth: 2 },
             markerEnd: { type: MarkerType.ArrowClosed, color: '#8b5cf6' },
@@ -263,8 +263,8 @@ function ContractEventFlowInner({ events, onClose }: ContractEventFlowProps) {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      fitView({ padding: 0.2, maxZoom: 1, minZoom: 0.3, duration: 200 });
-    }, 50);
+      fitView({ padding: 0.2, maxZoom: 1, minZoom: 0.3, duration: 0 });
+    }, 100);
     return () => clearTimeout(timer);
   }, [fitView]);
 
@@ -292,8 +292,9 @@ function ContractEventFlowInner({ events, onClose }: ContractEventFlowProps) {
             nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
-            fitView
+            fitView={true}
             fitViewOptions={{ padding: 0.2, maxZoom: 1, minZoom: 0.1 }}
+            defaultViewport={{ x: 0, y: 0, zoom: 0.5 }}
             className="bg-gray-50"
             proOptions={{ hideAttribution: true }}
             nodesDraggable={true}
@@ -303,7 +304,7 @@ function ContractEventFlowInner({ events, onClose }: ContractEventFlowProps) {
             maxZoom={2}
           >
             <Background color="#e2e8f0" gap={16} />
-            <Controls className="bg-white shadow-md border border-gray-100" />
+            <Controls className="bg-white shadow-md border border-gray-100" showFitView={true} showInteractive={false} />
             <MiniMap
               className="bg-white border border-gray-200 rounded"
               nodeColor={(node) => {
