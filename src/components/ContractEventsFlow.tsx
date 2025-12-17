@@ -199,10 +199,6 @@ export function ContractEventsFlow({ events, onClose, sourceAccount, functionNam
     return eventType === 'fn_call' || eventType === 'burn';
   });
 
-  // DEBUG: Log the first few diagnostic events to understand their structure
-  diagnosticEvents.forEach((event: any, idx: number) => {
-  });
-
   // Then add mint/transfer from asset_balance_changes at the END
   const assetEvents: any[] = [];
   if (assetBalanceChanges && assetBalanceChanges.length > 0) {
@@ -243,9 +239,9 @@ export function ContractEventsFlow({ events, onClose, sourceAccount, functionNam
       const functionName = topics[2] || 'unknown';
       const args = Array.isArray(data) ? data : [];
 
-      if ((functionName.includes('harvest') || functionName.includes('claim')) && currentPhase !== 'calculation') {
-        currentPhase = 'calculation';
-        addPhaseHeader('🔍', 'CALCULATION PHASE', '(Several contracts re-calculate the reward to confirm consistency)');
+      if (currentPhase !== 'execution') {
+        currentPhase = 'execution';
+        addPhaseHeader('🔍', 'CONTRACT EXECUTION PHASE', '(Smart contracts executing operations)');
       }
 
       const content: string[] = [];

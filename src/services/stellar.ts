@@ -6,9 +6,19 @@ import type {
   NetworkConfig,
   SorobanOperation,
   ContractEvent,
-  SimulationResult
+  SimulationResult,
+  StateChange
 } from '../types/stellar';
 import { Node, Edge } from 'reactflow';
+import { simpleContractMetadataService } from './simpleContractMetadata';
+import { processEventsToEffects } from './eventProcessor';
+
+// Helper to safely stringify values that might contain BigInt
+const safeStringify = (value: any, space?: number): string => {
+  return JSON.stringify(value, (key, val) =>
+    typeof val === 'bigint' ? val.toString() : val
+    , space);
+};
 
 let server: Horizon.Server;
 let networkConfig: NetworkConfig = {
@@ -20,10 +30,36 @@ let networkConfig: NetworkConfig = {
 export const setNetwork = (config: NetworkConfig) => {
   networkConfig = config;
   server = new Horizon.Server(config.networkUrl);
+
+  // Use reliable RPC endpoints
+  const rpcUrl = config.isTestnet
+    ? 'https://soroban-testnet.stellar.org'
+    : 'https://soroban-rpc.mainnet.stellar.gateway.fm';
+
+  const networkName = config.isTestnet ? 'testnet' : 'mainnet';
+  simpleContractMetadataService.setNetwork(networkName, rpcUrl, config.networkPassphrase);
 };
 
 // Initialize with testnet by default
 setNetwork(networkConfig);
+
+// Helper function to add timeout to fetch requests
+const fetchWithTimeout = async (url: string, timeout = 15000): Promise<Response> => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error('Request timeout - Horizon server took too long to respond');
+    }
+    throw error;
+  }
+};
 
 // Helper function to safely extract account address from source_account field
 // The Horizon API sometimes returns source_account as an array [0, "address"] instead of a string
@@ -69,6 +105,115 @@ function serializedBufferToUint8Array(obj: any): Uint8Array {
   return bytes;
 }
 
+// Helper function to format duration in seconds to human-readable format
+function formatDuration(seconds: number): string {
+  const units = [
+    { name: 'year', seconds: 31536000 },
+    { name: 'month', seconds: 2592000 },
+    { name: 'week', seconds: 604800 },
+    { name: 'day', seconds: 86400 },
+    { name: 'hour', seconds: 3600 },
+    { name: 'minute', seconds: 60 },
+  ];
+
+  for (const unit of units) {
+    if (seconds >= unit.seconds) {
+      const value = Math.floor(seconds / unit.seconds);
+      const remainder = seconds % unit.seconds;
+
+      // If exact match, return simple format
+      if (remainder === 0) {
+        return `${value} ${unit.name}${value !== 1 ? 's' : ''}`;
+      }
+
+      // If close enough (within 1%), return approximate
+      if (remainder < unit.seconds * 0.01) {
+        return `~${value} ${unit.name}${value !== 1 ? 's' : ''}`;
+      }
+    }
+  }
+
+  return `${seconds} seconds`;
+}
+
+// Helper function to decode base64 strings (used for data entries in effects)
+function decodeBase64Value(value: string): string {
+  try {
+    // Check if value looks like base64
+    if (!value || typeof value !== 'string') {
+      return value;
+    }
+
+    // Base64 strings are typically alphanumeric with +, /, and = padding
+    const base64Regex = /^[A-Za-z0-9+/]+=*$/;
+    if (!base64Regex.test(value)) {
+      return value;
+    }
+
+    // Try to decode as base64
+    const decoded = Buffer.from(value, 'base64').toString('utf-8');
+
+    // Validate that decoded string contains printable characters
+    // Include common whitespace chars: space(32), tab(9), newline(10), carriage return(13)
+    const isPrintable = (charCode: number) =>
+      (charCode >= 32 && charCode <= 126) ||
+      charCode === 9 || charCode === 10 || charCode === 13;
+
+    const chars = decoded.split('');
+    const printableCount = chars.filter(c => isPrintable(c.charCodeAt(0))).length;
+    const printableRatio = chars.length > 0 ? printableCount / chars.length : 0;
+
+    // If less than 50% printable or contains null bytes, treat as binary
+    if (printableRatio < 0.5 || decoded.includes('\0')) {
+      // Binary data - return hex representation
+      return `0x${Buffer.from(value, 'base64').toString('hex')}`;
+    }
+
+    // Return the decoded text (printable string)
+    return decoded;
+  } catch (error) {
+    // If decoding fails, return original value
+    return value;
+  }
+}
+
+// Enhanced helper to format contract values with decoding and duration formatting
+export function formatContractValue(value: any, typeHint?: string): string {
+  if (value === null || value === undefined) return 'null';
+
+  const valueStr = String(value);
+
+  // Check if it's a base64-encoded bytes value (ends with bytes or ==bytes)
+  if (valueStr.endsWith('bytes') || valueStr.match(/==bytes$/)) {
+    const base64Part = valueStr.replace(/bytes$/, '');
+    const decoded = decodeBase64Value(base64Part);
+
+    // If decoded successfully to text (not hex), show decoded value with checkmark
+    if (decoded !== base64Part && !decoded.startsWith('0x')) {
+      return `"${decoded}" ✓`;
+    }
+
+    // If it's hex data, return as-is
+    if (decoded.startsWith('0x')) {
+      return decoded;
+    }
+  }
+
+  // Check if it's a duration value (u64 that might be seconds)
+  if (valueStr.match(/^\d+u64$/) || valueStr.match(/^\d+i\d+$/)) {
+    const numStr = valueStr.replace(/[ui]\d+$/, '');
+    const num = parseInt(numStr);
+
+    // If it's a reasonable duration (between 1 minute and 100 years)
+    if (num >= 60 && num <= 3153600000) {
+      const duration = formatDuration(num);
+      return `${duration} (${valueStr})`;
+    }
+  }
+
+  return valueStr;
+}
+
 // Helper function to decode ScVal (Stellar Contract Value) to human-readable format
 export function decodeScVal(scVal: any): any {
   // Handle null/undefined values
@@ -82,6 +227,16 @@ export function decodeScVal(scVal: any): any {
     return scVal;
   }
 
+  // Handle plain arrays - these are not ScVal objects, they're already decoded
+  if (Array.isArray(scVal)) {
+    return scVal.map(item => decodeScVal(item));
+  }
+
+  // If it's a plain object without .switch() method, it's not an ScVal
+  if (typeof scVal === 'object' && !scVal.switch && !scVal._switch) {
+    return scVal;
+  }
+
   try {
     // FIRST: Check for special XDR types that scValToNative might not handle well
     try {
@@ -90,7 +245,13 @@ export function decodeScVal(scVal: any): any {
         return 'ContractInstance';
       }
       if (scValType === 'scvLedgerKeyNonce') {
-        return 'Nonce';
+        try {
+          const nonceKey = scVal.nonceKey();
+          const nonceValue = nonceKey.nonce();
+          return `${nonceValue.toString()}u64`;
+        } catch (e) {
+          return 'Nonce';
+        }
       }
       if (scValType === 'scvContractInstance') {
         // Try to extract contract instance data
@@ -361,7 +522,13 @@ export function decodeScVal(scVal: any): any {
       case 'scvLedgerKeyContractInstance':
         return 'ContractInstance';
       case 'scvLedgerKeyNonce':
-        return 'Nonce';
+        try {
+          const nonceKey = scVal.nonceKey();
+          const nonceValue = nonceKey.nonce();
+          return `${nonceValue.toString()}u64`;
+        } catch (e) {
+          return 'Nonce';
+        }
       case 'scvContractInstance':
         return 'ContractInstance';
       case 'scvTimepoint':
@@ -384,6 +551,129 @@ export function decodeScVal(scVal: any): any {
   }
 }
 
+// Helper to extract offer IDs from result_meta_xdr for manage offer operations
+function extractOfferIdFromXdr(resultMetaXdr: string, operationIndex: number): string | null {
+  try {
+    const txMeta = StellarSdk.xdr.TransactionMeta.fromXDR(resultMetaXdr, 'base64');
+
+    // Handle different TransactionMeta versions
+    let operations: any[] = [];
+    const metaVersion = txMeta.switch();
+
+    switch (metaVersion) {
+      case 0: // v0
+        operations = [txMeta.operations()];
+        break;
+      case 1: // v1
+        operations = txMeta.v1().operations();
+        break;
+      case 2: // v2
+        operations = txMeta.v2().operations();
+        break;
+      case 3: // v3
+        const v3 = txMeta.v3();
+        if (v3.sorobanMeta) {
+          operations = v3.operations ? v3.operations() : [];
+        } else {
+          operations = v3.operations ? v3.operations() : [];
+        }
+        break;
+      case 4: // v4
+        const v4 = txMeta.v4();
+        operations = v4.operations ? v4.operations() : [];
+        break;
+    }
+
+
+    // Get the specific operation's changes
+    if (operations && operations[operationIndex]) {
+      const opChanges = operations[operationIndex].changes();
+
+      // Look for offer ledger entries in the changes
+      for (const change of opChanges) {
+        const changeType = change.switch().name;
+
+        // Check for created or updated offers
+        if (changeType === 'ledgerEntryCreated' || changeType === 'ledgerEntryUpdated') {
+          const entry = changeType === 'ledgerEntryCreated'
+            ? change.created().data()
+            : change.updated().data();
+
+          const entryType = entry.switch().name;
+
+          if (entryType === 'offer') {
+            const offer = entry.offer();
+            const offerId = offer.offerId().toString();
+            return offerId;
+          }
+        }
+      }
+    } else {
+    }
+  } catch (error) {
+  }
+
+  return null;
+}
+
+// Helper to extract offer ID from result_xdr (ManageOfferSuccessResult)
+function extractOfferIdFromResultXdr(resultXdr: string, operationIndex: number): string | null {
+  try {
+    const txResult = StellarSdk.xdr.TransactionResult.fromXDR(resultXdr, 'base64');
+
+    // Get the result of the specific operation
+    const results = txResult.result().results();
+
+    if (results && results[operationIndex]) {
+      const opResult = results[operationIndex];
+      const tr = opResult.tr();
+
+      if (tr) {
+        const resultType = tr.switch().name;
+
+        // Check for manage offer results
+        if (resultType === 'manageSellOffer' || resultType === 'manageBuyOffer') {
+          let offerResult;
+          if (resultType === 'manageSellOffer') {
+            offerResult = tr.manageSellOfferResult();
+          } else {
+            offerResult = tr.manageBuyOfferResult();
+          }
+
+          const successResult = offerResult.success();
+          if (successResult) {
+            const offer = successResult.offer();
+            const offerType = offer.switch().name;
+
+            // manageOfferCreated contains the new offer with its ID
+            if (offerType === 'manageOfferCreated') {
+              const createdOffer = offer.offer();
+              const offerId = createdOffer.offerId().toString();
+              return offerId;
+            }
+            // manageOfferUpdated also contains the offer
+            else if (offerType === 'manageOfferUpdated') {
+              const updatedOffer = offer.offer();
+              const offerId = updatedOffer.offerId().toString();
+              return offerId;
+            }
+            // manageOfferDeleted means the offer was consumed/removed - check offersClaimed
+            else if (offerType === 'manageOfferDeleted') {
+              // For deleted offers, we can check if there were trades
+              const offersClaimed = successResult.offersClaimed();
+              if (offersClaimed && offersClaimed.length > 0) {
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (error) {
+  }
+
+  return null;
+}
+
 // Helper to format contract ID with truncation
 function formatContractId(contractId: string): string {
   if (contractId.length > 12) {
@@ -401,192 +691,481 @@ function formatAddress(address: string): string {
 }
 
 export const fetchTransaction = async (hash: string): Promise<TransactionDetails> => {
-  try {
+  let tx: any = null;
+  let isArchiveTransaction = false;
 
+  try {
     if (!server) {
       throw new Error('Horizon server not initialized. Please refresh the page.');
     }
-    const tx = await server.transactions().transaction(hash).call();
 
-    // Fetch full transaction data from Horizon to get XDR fields
+    // Try to fetch from Horizon first
+    try {
+      tx = await server.transactions().transaction(hash).call();
+    } catch (horizonError: any) {
+      // If Horizon returns 404, check if it exists on the opposite network first
+      if (horizonError.response?.status === 404 || horizonError.message?.includes('404') || horizonError.message?.includes('Not Found')) {
+        // Check if transaction exists on the opposite network
+        const currentNetwork = networkConfig.isTestnet ? 'Testnet' : 'Mainnet';
+        const oppositeNetwork = networkConfig.isTestnet ? 'Mainnet' : 'Testnet';
+        const oppositeUrl = networkConfig.isTestnet
+          ? 'https://horizon.stellar.org'
+          : 'https://horizon-testnet.stellar.org';
+
+        try {
+          const oppositeResponse = await fetchWithTimeout(`${oppositeUrl}/transactions/${hash}`, 5000);
+          if (oppositeResponse.ok) {
+            throw new Error(`Transaction not found on ${currentNetwork}. This transaction exists on ${oppositeNetwork}. Please switch networks and try again.`);
+          }
+        } catch (checkError: any) {
+          // If the check finds it on opposite network, throw that error
+          if (checkError.message?.includes('exists on')) {
+            throw checkError;
+          }
+          // Otherwise, continue to check if it's an archive transaction
+        }
+
+        // Transaction not found on either network's Horizon - might be archive data
+        isArchiveTransaction = true;
+        // Continue to RPC lookup below
+      } else {
+        // For other errors, rethrow
+        throw horizonError;
+      }
+    }
+
+    // Fetch full transaction data from Horizon to get XDR fields (skip if archive transaction)
     let resultMetaXdr = null;
     let sorobanMetaXdr = null;
-    try {
-      const horizonUrl = `${networkConfig.networkUrl}/transactions/${hash}`;
-      const response = await fetch(horizonUrl);
-      const txData = await response.json();
+    if (!isArchiveTransaction && tx) {
+      try {
+        const horizonUrl = `${networkConfig.networkUrl}/transactions/${hash}`;
+        const response = await fetchWithTimeout(horizonUrl);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        const txData = await response.json();
 
-      const xdrFields = Object.keys(txData).filter(k => k.includes('xdr') || k.includes('meta'));
+        const xdrFields = Object.keys(txData).filter(k => k.includes('xdr') || k.includes('meta'));
 
-      // Get available XDR fields - try both snake_case and camelCase
-      resultMetaXdr = txData.result_meta_xdr || (txData as any).resultMetaXdr;
+        // Get available XDR fields - try both snake_case and camelCase
+        resultMetaXdr = txData.result_meta_xdr || (txData as any).resultMetaXdr;
 
-      // Store XDR fields on tx object for later use
-      (tx as any).result_meta_xdr = resultMetaXdr;
-      (tx as any).result_xdr = txData.result_xdr;
-      (tx as any).envelope_xdr = txData.envelope_xdr;
+        // Store XDR fields on tx object for later use
+        (tx as any).result_meta_xdr = resultMetaXdr;
+        (tx as any).result_xdr = txData.result_xdr;
+        (tx as any).envelope_xdr = txData.envelope_xdr;
 
-      // Check for soroban_meta_xdr (for Soroban transactions)
-      if (txData.soroban_meta_xdr) {
-        sorobanMetaXdr = txData.soroban_meta_xdr;
-        (tx as any).soroban_meta_xdr = sorobanMetaXdr;
-      }
+        // Check for soroban_meta_xdr (for Soroban transactions)
+        if (txData.soroban_meta_xdr) {
+          sorobanMetaXdr = txData.soroban_meta_xdr;
+          (tx as any).soroban_meta_xdr = sorobanMetaXdr;
+        }
 
-      // Check if this is a fee-bumped transaction
-      const envelopeXdr = txData.envelope_xdr;
-      if (envelopeXdr) {
-        try {
-          const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(envelopeXdr, 'base64');
-          const envelopeType = envelope.switch().name;
+        // Check if this is a fee-bumped transaction
+        const envelopeXdr = txData.envelope_xdr;
+        if (envelopeXdr) {
+          try {
+            const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(envelopeXdr, 'base64');
+            const envelopeType = envelope.switch().name;
 
-          if (envelopeType === 'envelopeTypeTxFeeBump' && envelope.feeBump()) {
-            const innerTx = envelope.feeBump().tx().innerTx();
-            const innerTxType = innerTx.switch().name;
+            if (envelopeType === 'envelopeTypeTxFeeBump' && envelope.feeBump()) {
+              const innerTx = envelope.feeBump().tx().innerTx();
+              const innerTxType = innerTx.switch().name;
 
-            // Check if inner_transaction field exists in Horizon response
-            if (txData.inner_transaction) {
-            }
+              // Check if inner_transaction field exists in Horizon response
+              if (txData.inner_transaction) {
+              }
 
-            // For fee-bumped Soroban transactions, the inner transaction hash is available in Horizon response
-            if (txData.inner_transaction && txData.inner_transaction.hash) {
-              const innerHash = txData.inner_transaction.hash;
+              // For fee-bumped Soroban transactions, the inner transaction hash is available in Horizon response
+              if (txData.inner_transaction && txData.inner_transaction.hash) {
+                const innerHash = txData.inner_transaction.hash;
 
-              // Fetch the inner transaction to get soroban_meta_xdr
-              const innerUrl = `${networkConfig.networkUrl}/transactions/${innerHash}`;
-              try {
-                const innerResponse = await fetch(innerUrl);
-                const innerTxData = await innerResponse.json();
-                const innerXdrFields = Object.keys(innerTxData).filter(k => k.includes('xdr') || k.includes('meta'));
-                innerXdrFields.forEach(field => {
-                });
+                // Fetch the inner transaction to get soroban_meta_xdr
+                const innerUrl = `${networkConfig.networkUrl}/transactions/${innerHash}`;
+                try {
+                  const innerResponse = await fetchWithTimeout(innerUrl);
+                  if (!innerResponse.ok) {
+                    throw new Error(`HTTP ${innerResponse.status}`);
+                  }
+                  const innerTxData = await innerResponse.json();
+                  const innerXdrFields = Object.keys(innerTxData).filter(k => k.includes('xdr') || k.includes('meta'));
+                  innerXdrFields.forEach(field => {
+                  });
 
-                // Try to get soroban_meta_xdr from inner transaction
-                if (innerTxData.soroban_meta_xdr) {
-                  sorobanMetaXdr = innerTxData.soroban_meta_xdr;
-                  (tx as any).soroban_meta_xdr = sorobanMetaXdr;
-                }
-
-                // For result_meta_xdr, check inner transaction (it may have more detailed data)
-                if (innerTxData.result_meta_xdr) {
-                  resultMetaXdr = innerTxData.result_meta_xdr;
-                  (tx as any).result_meta_xdr = resultMetaXdr;
-                  (tx as any).result_xdr = innerTxData.result_xdr;
-                  (tx as any).envelope_xdr = innerTxData.envelope_xdr;
-                  // If no soroban_meta_xdr found, use result_meta_xdr as fallback
-                  if (!sorobanMetaXdr) {
-                    sorobanMetaXdr = innerTxData.result_meta_xdr;
+                  // Try to get soroban_meta_xdr from inner transaction
+                  if (innerTxData.soroban_meta_xdr) {
+                    sorobanMetaXdr = innerTxData.soroban_meta_xdr;
                     (tx as any).soroban_meta_xdr = sorobanMetaXdr;
                   }
-                } else {
-                  // Keep the outer transaction's result_meta_xdr (already set above)
+
+                  // For result_meta_xdr, check inner transaction (it may have more detailed data)
+                  if (innerTxData.result_meta_xdr) {
+                    resultMetaXdr = innerTxData.result_meta_xdr;
+                    (tx as any).result_meta_xdr = resultMetaXdr;
+                    (tx as any).result_xdr = innerTxData.result_xdr;
+                    (tx as any).envelope_xdr = innerTxData.envelope_xdr;
+                    // If no soroban_meta_xdr found, use result_meta_xdr as fallback
+                    if (!sorobanMetaXdr) {
+                      sorobanMetaXdr = innerTxData.result_meta_xdr;
+                      (tx as any).soroban_meta_xdr = sorobanMetaXdr;
+                    }
+                  } else {
+                    // Keep the outer transaction's result_meta_xdr (already set above)
+                  }
+                } catch (innerErr) {
                 }
-              } catch (innerErr) {
               }
             }
+          } catch (xdrErr) {
           }
-        } catch (xdrErr) {
         }
-      }
 
-      // If result_meta_xdr is not available, try to extract resources from result_xdr
-      if (!resultMetaXdr && txData.result_xdr) {
-        try {
-          const resultXdr = StellarSdk.xdr.TransactionResult.fromXDR(txData.result_xdr, 'base64');
-          const resultCode = resultXdr.result().switch().name;
+        // If result_meta_xdr is not available, try to extract resources from result_xdr
+        if (!resultMetaXdr && txData.result_xdr) {
+          try {
+            const resultXdr = StellarSdk.xdr.TransactionResult.fromXDR(txData.result_xdr, 'base64');
+            const resultCode = resultXdr.result().switch().name;
 
-          // For successful Soroban transactions, extract resource usage from result
-          if (resultCode === 'txSuccess' || resultCode === 'txFeeBumpInnerSuccess') {
-            const results = resultCode === 'txFeeBumpInnerSuccess'
-              ? resultXdr.result().innerResultPair().result().result().results()
-              : resultXdr.result().results();
+            // For successful Soroban transactions, extract resource usage from result
+            if (resultCode === 'txSuccess' || resultCode === 'txFeeBumpInnerSuccess') {
+              const results = resultCode === 'txFeeBumpInnerSuccess'
+                ? resultXdr.result().innerResultPair().result().result().results()
+                : resultXdr.result().results();
 
-            // Look for InvokeHostFunction results
-            if (results && results.length > 0) {
-              for (let i = 0; i < results.length; i++) {
-                const opResult = results[i];
-                const opCode = opResult.tr().switch().name;
+              // Look for InvokeHostFunction results
+              if (results && results.length > 0) {
+                for (let i = 0; i < results.length; i++) {
+                  const opResult = results[i];
+                  const opCode = opResult.tr().switch().name;
 
-                if (opCode === 'invokeHostFunction') {
-                  const invokeResult = opResult.tr().invokeHostFunctionResult();
-                  const invokeCode = invokeResult.switch().name;
+                  if (opCode === 'invokeHostFunction') {
+                    const invokeResult = opResult.tr().invokeHostFunctionResult();
+                    const invokeCode = invokeResult.switch().name;
 
-                  if (invokeCode === 'invokeHostFunctionSuccess') {
-                    // Store the result for later resource extraction
-                    (tx as any).__sorobanInvokeResult = invokeResult;
+                    if (invokeCode === 'invokeHostFunctionSuccess') {
+                      // Store the result for later resource extraction
+                      (tx as any).__sorobanInvokeResult = invokeResult;
+                    }
                   }
                 }
               }
             }
+          } catch (resultErr) {
           }
-        } catch (resultErr) {
         }
-      }
 
-      // Extract resource usage from envelope sorobanData (for historical transactions)
+        // Extract resource usage from envelope sorobanData (for historical transactions)
 
-      if (txData.envelope_xdr && !resultMetaXdr && !sorobanMetaXdr) {
-        try {
-          const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(txData.envelope_xdr, 'base64');
-          let txToCheck = null;
+        if (txData.envelope_xdr && !resultMetaXdr && !sorobanMetaXdr) {
+          try {
+            const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(txData.envelope_xdr, 'base64');
+            let txToCheck = null;
 
-          // Handle fee-bumped transactions
-          if (envelope.switch().name === 'envelopeTypeTxFeeBump' && envelope.feeBump()) {
-            const innerTx = envelope.feeBump().tx().innerTx();
-            if (innerTx.switch().name === 'envelopeTypeTx') {
-              txToCheck = innerTx.v1().tx();
+            // Handle fee-bumped transactions
+            if (envelope.switch().name === 'envelopeTypeTxFeeBump' && envelope.feeBump()) {
+              const innerTx = envelope.feeBump().tx().innerTx();
+              if (innerTx.switch().name === 'envelopeTypeTx') {
+                txToCheck = innerTx.v1().tx();
+              }
+            } else if (envelope.switch().name === 'envelopeTypeTx' && envelope.v1()) {
+              txToCheck = envelope.v1().tx();
             }
-          } else if (envelope.switch().name === 'envelopeTypeTx' && envelope.v1()) {
-            txToCheck = envelope.v1().tx();
-          }
 
-          if (txToCheck) {
+            if (txToCheck) {
 
-            const ext = txToCheck.ext ? txToCheck.ext() : null;
+              const ext = txToCheck.ext ? txToCheck.ext() : null;
 
-            if (ext) {
-              // Check the internal structure (_switch: 1 means v1 extension)
-              const extSwitch = (ext as any)._switch;
-              const extArm = (ext as any)._arm;
-              const extValue = (ext as any)._value;
+              if (ext) {
+                // Check the internal structure (_switch: 1 means v1 extension)
+                const extSwitch = (ext as any)._switch;
+                const extArm = (ext as any)._arm;
+                const extValue = (ext as any)._value;
 
-              // _switch: 1 means v1 extension (Soroban)
-              if (extSwitch === 1 && extArm === 'sorobanData' && extValue) {
+                // _switch: 1 means v1 extension (Soroban)
+                if (extSwitch === 1 && extArm === 'sorobanData' && extValue) {
 
-                try {
-                  // The sorobanData is in _value
-                  const sorobanData = extValue;
+                  try {
+                    // The sorobanData is in _value
+                    const sorobanData = extValue;
 
-                  // Store for later extraction
-                  (tx as any).__envelopeSorobanData = sorobanData.toXDR('base64');
-                } catch (xdrErr) {
+                    // Store for later extraction
+                    (tx as any).__envelopeSorobanData = sorobanData.toXDR('base64');
+                  } catch (xdrErr) {
+                  }
+                } else {
                 }
               } else {
               }
             } else {
             }
-          } else {
+          } catch (envErr) {
           }
-        } catch (envErr) {
+        }
+      } catch (err) {
+      }
+    }
+
+    // For archive transactions, fetch directly from RPC
+    let archiveRpcData: any = null;
+    if (isArchiveTransaction) {
+      try {
+        archiveRpcData = await querySorobanRpc(hash);
+      } catch (rpcError: any) {
+        // If RPC also fails, transaction doesn't exist
+        const currentNetwork = networkConfig.isTestnet ? 'Testnet' : 'Mainnet';
+        throw new Error(`Transaction not found on ${currentNetwork}. Please verify the transaction hash and network selection.`);
+      }
+
+      if (!archiveRpcData) {
+        const currentNetwork = networkConfig.isTestnet ? 'Testnet' : 'Mainnet';
+        throw new Error(`Transaction not found on ${currentNetwork}. Please verify the transaction hash and network selection.`);
+      }
+
+      // NOT_FOUND is OK for archive transactions - they may still have envelopeXdr and resultMetaXdr
+      if (archiveRpcData.status === 'NOT_FOUND') {
+
+        // If we have neither envelope/meta nor events, we can't show the transaction
+        if (!archiveRpcData.envelopeXdr && !archiveRpcData.resultMetaXdr && !archiveRpcData.events) {
+          const currentNetwork = networkConfig.isTestnet ? 'Testnet' : 'Mainnet';
+          throw new Error(`Transaction not found on ${currentNetwork}. Please verify the transaction hash and network selection.`);
+        }
+      } else if (archiveRpcData.status === 'FAILED') {
+        // Still proceed - we can show the failed transaction details
+      } else if (archiveRpcData.status !== 'SUCCESS') {
+        throw new Error(`Archive transaction has unexpected status: ${archiveRpcData.status}`);
+      }
+
+      const rpcData = archiveRpcData;
+
+      // Parse envelope to get source account and ledger
+      let sourceAccount = '';
+      let ledger = 0;
+      if (rpcData.envelopeXdr) {
+        try {
+          const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(rpcData.envelopeXdr, 'base64');
+          const envSwitch = envelope.switch();
+
+          if (envSwitch.name === 'envelopeTypeTx') {
+            const txEnvelope = envelope.v1();
+            const txBody = txEnvelope.tx();
+            const sourceAcct = txBody.sourceAccount();
+
+            // Extract source account from MuxedAccount
+            if (sourceAcct.switch().name === 'keyTypeEd25519') {
+              sourceAccount = StellarSdk.StrKey.encodeEd25519PublicKey(sourceAcct.ed25519());
+            } else if (sourceAcct.switch().name === 'keyTypeMuxedEd25519') {
+              sourceAccount = StellarSdk.StrKey.encodeEd25519PublicKey(sourceAcct.med25519().ed25519());
+            }
+          } else if (envSwitch.name === 'envelopeTypeTxV0') {
+            const txEnvelope = envelope.v0();
+            const txBody = txEnvelope.tx();
+            const sourceAcctPubKey = txBody.sourceAccountEd25519();
+            sourceAccount = StellarSdk.StrKey.encodeEd25519PublicKey(sourceAcctPubKey);
+          }
+        } catch (e) {
         }
       }
-    } catch (err) {
+
+      // Get ledger from RPC data
+      ledger = rpcData.ledger || 0;
+
+      // Build a minimal tx object from RPC data
+      tx = {
+        id: hash,
+        hash: hash,
+        created_at: rpcData.createdAt || new Date().toISOString(),
+        source_account: sourceAccount,
+        fee_charged: rpcData.fee || '0',
+        successful: true,
+        ledger: ledger,
+        result_meta_xdr: rpcData.resultMetaXdr,
+        envelope_xdr: rpcData.envelopeXdr,
+        result_xdr: rpcData.resultXdr,
+      };
+
+      resultMetaXdr = rpcData.resultMetaXdr;
     }
-    const operations = await server.operations()
-      .forTransaction(hash)
-      .limit(200)
-      .call();
+
+    let operations: any;
+    if (!isArchiveTransaction) {
+      operations = await server.operations()
+        .forTransaction(hash)
+        .limit(200)
+        .call();
+    } else {
+      // For archive transactions, parse operations from envelope XDR
+      operations = { records: [] };
+      if (tx.envelope_xdr) {
+        try {
+          const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(tx.envelope_xdr, 'base64');
+          const envSwitch = envelope.switch();
+
+          let transaction;
+          if (envSwitch.name === 'envelopeTypeTx') {
+            transaction = envelope.v1().tx();
+          } else if (envSwitch.name === 'envelopeTypeTxV0') {
+            transaction = envelope.v0().tx();
+          }
+
+          if (transaction) {
+            const xdrOps = transaction.operations();
+            operations.records = xdrOps.map((xdrOp: any, index: number) => {
+              const body = xdrOp.body();
+              const opType = body.switch().name;
+
+              // Map XDR operation type to Horizon operation type
+              const typeMap: Record<string, string> = {
+                'invokeHostFunction': 'invoke_host_function',
+                'createAccount': 'create_account',
+                'payment': 'payment',
+                'pathPaymentStrictReceive': 'path_payment_strict_receive',
+                'pathPaymentStrictSend': 'path_payment_strict_send',
+                'manageSellOffer': 'manage_sell_offer',
+                'manageBuyOffer': 'manage_buy_offer',
+                'createPassiveSellOffer': 'create_passive_sell_offer',
+                'setOptions': 'set_options',
+                'changeTrust': 'change_trust',
+                'allowTrust': 'allow_trust',
+                'accountMerge': 'account_merge',
+                'manageData': 'manage_data',
+                'bumpSequence': 'bump_sequence',
+                'claimClaimableBalance': 'claim_claimable_balance',
+                'beginSponsoringFutureReserves': 'begin_sponsoring_future_reserves',
+                'endSponsoringFutureReserves': 'end_sponsoring_future_reserves',
+                'revokeSponsorship': 'revoke_sponsorship',
+                'clawback': 'clawback',
+                'clawbackClaimableBalance': 'clawback_claimable_balance',
+                'setTrustLineFlags': 'set_trust_line_flags',
+                'liquidityPoolDeposit': 'liquidity_pool_deposit',
+                'liquidityPoolWithdraw': 'liquidity_pool_withdraw',
+              };
+
+              const horizonType = typeMap[opType] || opType.toLowerCase();
+
+              const opRecord: any = {
+                id: `${hash}-${index}`,
+                type: horizonType,
+                type_i: body.switch().value,
+                source_account: tx.source_account,
+                transaction_hash: hash,
+              };
+
+              // For invoke_host_function operations, extract the host function XDR
+              if (opType === 'invokeHostFunction') {
+                try {
+                  const hostFunction = body.invokeHostFunction();
+                  opRecord.host_function_xdr = hostFunction.toXDR('base64');
+                } catch (e) {
+                }
+              }
+
+              return opRecord;
+            });
+
+          }
+        } catch (e) {
+        }
+      }
+    }
 
     // Normalize source_account fields immediately - Horizon sometimes returns arrays
     operations.records = operations.records.map(op => ({
       ...op,
       source_account: extractAccountAddress(op.source_account)
     }));
-    
+
+    // Extract ORIGINAL offer_ids from transaction envelope XDR (before effects modify them)
+    if (tx.envelope_xdr) {
+      try {
+        const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(tx.envelope_xdr, 'base64');
+        let transaction;
+        if (envelope.switch() === StellarSdk.xdr.EnvelopeType.envelopeTypeTx()) {
+          transaction = envelope.v1().tx();
+        } else if (envelope.switch() === StellarSdk.xdr.EnvelopeType.envelopeTypeTxV0()) {
+          transaction = envelope.v0().tx();
+        } else {
+        }
+
+        if (transaction) {
+          const xdrOperations = transaction.operations();
+          operations.records.forEach((op, index) => {
+            if (index < xdrOperations.length) {
+              const xdrOp = xdrOperations[index];
+              const opBody = xdrOp.body();
+              const opSwitch = opBody.switch();
+
+              // Extract original offer_id and price_r for offer operations
+              if (opSwitch === StellarSdk.xdr.OperationType.manageSellOffer()) {
+                try {
+                  // Use _value directly - it's the actual XDR structure
+                  const offerOp = opBody._value;
+
+                  const offerIdObj = offerOp.offerId();
+                  const offerIdStr = String(offerIdObj.low === 0 && offerIdObj.high === 0 ? 0 : offerIdObj);
+                  (op as any).original_offer_id = offerIdStr;
+
+                  // Extract price_r from XDR
+                  const priceObj = offerOp.price();
+                  if (priceObj) {
+                    (op as any).price_r = {
+                      n: priceObj.n(),
+                      d: priceObj.d()
+                    };
+                  }
+                } catch (sellOfferError) {
+                }
+              }
+
+              if (opSwitch === StellarSdk.xdr.OperationType.manageBuyOffer()) {
+                try {
+                  // Use _value directly - it's the actual XDR structure
+                  const offerOp = opBody._value;
+
+                  const offerIdObj = offerOp.offerId();
+                  const offerIdStr = String(offerIdObj.low === 0 && offerIdObj.high === 0 ? 0 : offerIdObj);
+                  (op as any).original_offer_id = offerIdStr;
+
+                  // Extract price_r from XDR
+                  const priceObj = offerOp.price();
+                  if (priceObj) {
+                    (op as any).price_r = {
+                      n: priceObj.n(),
+                      d: priceObj.d()
+                    };
+                  }
+                } catch (buyOfferError) {
+                }
+              }
+
+              if (opSwitch === StellarSdk.xdr.OperationType.createPassiveSellOffer()) {
+                try {
+                  // Use _value directly - it's the actual XDR structure
+                  const offerOp = opBody._value;
+
+                  // Extract price_r from XDR
+                  const priceObj = offerOp.price();
+                  if (priceObj) {
+                    (op as any).price_r = {
+                      n: priceObj.n(),
+                      d: priceObj.d()
+                    };
+                  }
+                } catch (passiveOfferError) {
+                }
+              }
+            }
+          });
+        }
+      } catch (xdrError) {
+      }
+    }
+
     // Log each operation in detail
     operations.records.forEach((op, index) => {
-      
+
       if (op.type === 'invoke_host_function') {
-        
+
         // Check every possible field that might contain contract info
         const possibleContractFields = [
           'contract_id', 'contractId', 'contract_address', 'contractAddress',
@@ -594,7 +1173,7 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
           'host_function', 'hostFunction', 'function', 'invoke_contract',
           'parameters', 'args', 'auth', 'footprint', 'resource_fee'
         ];
-        
+
         possibleContractFields.forEach(field => {
           if ((op as any)[field] !== undefined) {
           }
@@ -621,7 +1200,12 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
     // Try to get Soroban details for both testnet and mainnet
     let sorobanData = null;
     try {
-      sorobanData = await querySorobanRpc(hash);
+      // If this is an archive transaction, reuse the RPC data we already fetched
+      if (isArchiveTransaction && archiveRpcData) {
+        sorobanData = archiveRpcData;
+      } else {
+        sorobanData = await querySorobanRpc(hash);
+      }
 
       // CRITICAL: Add resultMetaXdr from RPC to tx object for state changes extraction
       if (sorobanData && sorobanData.resultMetaXdr) {
@@ -631,7 +1215,7 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
 
         const alternativeRpcUrls = networkConfig.isTestnet
           ? ['https://soroban-testnet.stellar.org', 'https://rpc-futurenet.stellar.org']
-          : ['https://mainnet.sorobanrpc.com', 'https://soroban-rpc.mainnet.stellarchain.io'];
+          : ['https://soroban-rpc.mainnet.stellar.gateway.fm'];
 
         for (const rpcUrl of alternativeRpcUrls) {
           try {
@@ -672,56 +1256,68 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
         if (contractId && contractId !== 'Unknown') {
           contractIds.set(i, contractId);
 
-          // Fetch effects for this operation
-          let opEffects: any[] = [];
-          let opEvents: any[] = [];
-          try {
-            const effectsResponse = await server.effects().forOperation(op.id).limit(200).call();
-            opEffects = effectsResponse.records || [];
-
-            // Convert effects to events format for display
-            opEvents = opEffects
-              .filter((effect: any) => effect.type === 'contract_credited' || effect.type === 'contract_debited' || effect.type.includes('contract'))
-              .map((effect: any) => ({
-                type: effect.type.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase()),
-                contractId,
-                topics: [effect.type, effect.asset_code || effect.asset || contractId],
-                data: effect.amount || effect.balance || effect,
-                ...effect
-              }));
-          } catch (effectsError) {
-          }
+          // Pre-fetch contract metadata to ensure it's cached for event processing
+          simpleContractMetadataService.getContractMetadata(contractId).catch(() => {
+            // Silently fail - we'll use fallback processing if metadata isn't available
+          });
 
           // Extract function details with enhanced data
+          // For Soroban operations, we extract all effects from XDR state changes
+          // No need to fetch from Horizon API - it's less accurate for Soroban
           const functionDetails = extractFunctionDetails(op, sorobanData, i, tx, contractId);
 
-          // Merge fetched events with extracted events
-          const allEvents = [...(functionDetails.events || []), ...opEvents];
+          const allEvents = functionDetails.events || [];
 
-          // Create ledger effects descriptions from state changes (more reliable for Soroban)
-          // If Horizon API effects are available, include those too
+          // Create ledger effects from state changes and events (extracted from XDR)
           const ledgerEffects: any[] = [];
 
-          // Add state changes as effects (these are the most reliable for Soroban)
-          if (functionDetails.stateChanges && functionDetails.stateChanges.length > 0) {
-            functionDetails.stateChanges.forEach((change: any) => {
-              // Pass through ALL fields from the state change
-              ledgerEffects.push({
-                ...change,
-                description: change.description || `${change.type} ${change.storageType || ''} data`,
-                // Ensure we have the data field accessible as both 'after' and 'value' for compatibility
-                after: change.value || change.data || change.after,
-                value: change.value || change.data || change.after
-              });
-            });
+          // Process contract events dynamically using contract specs
+          // CRITICAL: Only include effects from events that belong to THIS contract
+          if (functionDetails.events && functionDetails.events.length > 0) {
+            const eventEffects = await processEventsToEffects(functionDetails.events, contractId);
+            // Filter to only include effects from THIS contract (exclude cross-contract call effects)
+            const filteredEventEffects = eventEffects.filter(effect =>
+              effect.contractId === contractId || !effect.contractId
+            );
+            ledgerEffects.push(...filteredEventEffects);
           }
 
-          // Also add any Horizon API effects if available (for classical operations)
-          if (opEffects.length > 0) {
-            opEffects.forEach((effect: any) => {
+          // Then add state changes as effects (contract data changes)
+          // IMPORTANT: Keep the exact order from the transaction, no merging/deduplication
+          // CRITICAL: Only include state changes that belong to THIS specific contract
+          if (functionDetails.stateChanges && functionDetails.stateChanges.length > 0) {
+            functionDetails.stateChanges.forEach((change: any, idx: number) => {
+              // Skip ledgerEntryState changes (these are just "before" snapshots)
+              // Only show actual modifications: created, updated, removed
+              if (change.changeType === 'ledgerEntryState') {
+                return; // Skip
+              }
+
+              // Filter out internal metadata updates (LedgerKeyContractInstance)
+              // These are contract instance updates that happen automatically
+              if (change.keyDisplay === '<LedgerKeyContractInstance>') {
+                return; // Skip internal metadata
+              }
+
+              // Filter out TTL extensions - these are automatic and not user-relevant
+              if (change.keyDisplay === '<LedgerKeyTTL>' || change.ledgerEntryType === 'ttl') {
+                return; // Skip TTL
+              }
+
+              // CRITICAL: Only include state changes for THIS specific contract
+              // This prevents showing state changes from other contracts in multi-contract calls
+              if (change.contractId && change.contractId !== contractId) {
+                return; // Skip state changes from other contracts
+              }
+
+              // Add the change to effects in the exact order it appears
+              // Use after for updated/created, before for removed, or value for others
+              const effectData = change.after || change.before || change.value || change.data;
               ledgerEffects.push({
-                type: effect.type,
-                description: formatEffectDescription(effect, contractId)
+                ...change,
+                data: effectData,
+                description: change.description || `${change.type} ${change.storageType || ''} data`,
+                value: effectData
               });
             });
           }
@@ -750,7 +1346,6 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
 
           // Extract events for this operation
           if (functionDetails.events && functionDetails.events.length > 0) {
-
             const filteredEvents = functionDetails.events
               .filter((event: any) => {
                 // Keep events with topics OR data
@@ -791,7 +1386,7 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
             events.push(...filteredEvents);
           }
         } else {
-          
+
           // Add a placeholder soroban operation
           sorobanOperations.push({
             type: 'soroban',
@@ -805,14 +1400,340 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
       }
     }
 
+    // Determine if this is a pure Soroban transaction
+    const hasSorobanOperations = sorobanOperations.length > 0;
+    const hasClassicalOperations = operations.records.some((op: any) =>
+      op.type !== 'invoke_host_function'
+    );
+
     // Fetch transaction effects
     let effects: any[] = [];
-    try {
-      const effectsResponse = await tx.effects({ limit: 200 });
-      effects = effectsResponse.records || [];
-    } catch (effectsError: any) {
+
+    // Only fetch Horizon effects if there are classical operations
+    // For pure Soroban transactions, we extract effects from XDR state changes instead
+    if (hasClassicalOperations) {
+      try {
+        const effectsResponse = await tx.effects({ limit: 200 });
+        const horizonEffects = effectsResponse.records || [];
+
+        // If there are also Soroban operations, filter out any Soroban-related effects from Horizon
+        // to avoid duplicates (we extract those from XDR)
+        if (hasSorobanOperations) {
+          effects = horizonEffects.filter((effect: any) =>
+            !effect.type.includes('contract_') &&
+            effect.type !== 'liquidity_pool_trade' // Soroban can also trigger this
+          );
+        } else {
+          effects = horizonEffects;
+        }
+      } catch (effectsError: any) {
+      }
+
+      // Decode base64 values in data-related effects
+      effects = effects.map((effect: any) => {
+        if (effect.type === 'data_created' || effect.type === 'data_updated' || effect.type === 'data_removed') {
+          const decodedEffect = { ...effect };
+
+          // Decode name if it's base64
+          if (effect.name) {
+            decodedEffect.name = decodeBase64Value(effect.name);
+            decodedEffect.name_base64 = effect.name;
+          }
+
+          // Decode value if it's base64 (data_created and data_updated have values)
+          if (effect.value) {
+            decodedEffect.value = decodeBase64Value(effect.value);
+            decodedEffect.value_base64 = effect.value;
+          }
+
+          return decodedEffect;
+        }
+        return effect;
+      });
     }
+
+    // Add Soroban contract effects extracted from XDR state changes
+    // These are more accurate than Horizon effects for Soroban operations
+    sorobanOperations.forEach((op: any) => {
+      if (op.effects && op.effects.length > 0) {
+        effects.push(...op.effects);
+      }
+    });
+
+    // Convert SAC token events to account effects for better visibility
+    // This ensures burn/mint/transfer events show up as account_burned/credited/debited
+    const convertEventsToAccountEffects = async (events: any[]): Promise<any[]> => {
+      const accountEffects: any[] = [];
+
+      for (const event of events || []) {
+        if (!event.topics || event.topics.length === 0) continue;
+
+        // Topics are already decoded by decodeScVal
+        const eventType = String(event.topics[0]).toLowerCase();
+        const topics = event.topics.slice(1);
+
+        // Data is a single decoded value (not an array)
+        const amountValue = event.data;
+        let amount = '';
+        if (amountValue !== null && amountValue !== undefined) {
+          if (typeof amountValue === 'number' || typeof amountValue === 'string' || typeof amountValue === 'bigint') {
+            amount = String(amountValue);
+          } else if (typeof amountValue === 'object' && 'value' in amountValue) {
+            // Handle wrapped values
+            amount = String(amountValue.value);
+          }
+        }
+
+        // Skip if no amount
+        if (!amount) continue;
+
+        // Get asset info from contract metadata
+        const contractId = event.contractId;
+        let assetCode = 'TOKEN';
+        let decimals = 7;
+
+        // Try to extract asset symbol from topics
+        // Note: topics array has event type removed (line 1211: topics = event.topics.slice(1))
+        // For transfer events: topics = [from, to, asset_info]
+        // For mint events: topics = [recipient, asset_info]
+        // For burn events: topics = [from, asset_info]
+        let extractedSymbol: string | null = null;
+
+        if (eventType === 'transfer' && topics.length >= 3) {
+          extractedSymbol = String(topics[2]);
+        } else if (eventType === 'mint' && topics.length >= 2) {
+          extractedSymbol = String(topics[1]);
+        } else if (eventType === 'burn' && topics.length >= 2) {
+          extractedSymbol = String(topics[1]);
+        }
+
+        if (extractedSymbol) {
+          // Direct 'native' check
+          if (extractedSymbol.toLowerCase() === 'native' || extractedSymbol.toLowerCase() === 'stellar:native') {
+            assetCode = 'XLM';
+          }
+          // Symbol with colon format (e.g., "USDC:GBDX...")
+          else if (extractedSymbol.includes(':')) {
+            assetCode = extractedSymbol.split(':')[0];
+          }
+          // Plain symbol (e.g., "USDC")
+          else if (extractedSymbol && extractedSymbol !== 'undefined') {
+            assetCode = extractedSymbol;
+          }
+        }
+
+        // Try to get additional info from contract metadata
+        try {
+          const metadata = await simpleContractMetadataService.getContractMetadata(contractId);
+          if (metadata?.isToken) {
+            if (metadata.tokenSymbol) {
+              assetCode = metadata.tokenSymbol;
+              // SAC contracts for native XLM might return "native", convert to "XLM"
+              if (assetCode.toLowerCase() === 'native' || assetCode.toLowerCase() === 'stellar:native') {
+                assetCode = 'XLM';
+              }
+            }
+            if (metadata.tokenDecimals !== undefined) {
+              decimals = metadata.tokenDecimals;
+            }
+          } else if (metadata?.tokenSymbol) {
+            // Some SAC contracts might not be marked as isToken but still have symbol
+            assetCode = metadata.tokenSymbol;
+            // SAC contracts for native XLM might return "native", convert to "XLM"
+            if (assetCode.toLowerCase() === 'native' || assetCode.toLowerCase() === 'stellar:native') {
+              assetCode = 'XLM';
+            }
+            if (metadata.tokenDecimals !== undefined) {
+              decimals = metadata.tokenDecimals;
+            }
+          } else {
+          }
+        } catch (e) {
+          // Use extracted symbol or defaults if metadata fetch fails
+        }
+
+        // Format amount with proper decimals
+        const formattedAmount = simpleContractMetadataService.formatAmount(amount, decimals);
+
+        // Helper to format account address
+        const formatAccount = (addr: any): string | null => {
+          if (!addr) return null;
+          if (typeof addr === 'string') {
+            // Already a string address
+            return addr;
+          }
+          if (typeof addr === 'object' && addr.value) {
+            return String(addr.value);
+          }
+          return String(addr);
+        };
+
+        switch (eventType) {
+          case 'burn':
+            const burnAccount = formatAccount(topics[0]);
+            if (burnAccount) {
+              accountEffects.push({
+                type: 'account_burned',
+                account: burnAccount,
+                amount: formattedAmount,
+                asset_code: assetCode,
+                asset_type: 'credit_alphanum12',
+                contractId
+              });
+            }
+            break;
+
+          case 'mint':
+            const mintAccount = formatAccount(topics[0]);
+            if (mintAccount) {
+              const mintEffect = {
+                type: 'account_minted',
+                account: mintAccount,
+                amount: formattedAmount,
+                asset_code: assetCode,
+                asset_type: 'credit_alphanum12',
+                contractId
+              };
+              accountEffects.push(mintEffect);
+            } else {
+            }
+            break;
+
+          case 'transfer':
+            const fromAccount = formatAccount(topics[0]);
+            const toAccount = formatAccount(topics[1]);
+
+            if (fromAccount && toAccount) {
+              // Debit from sender
+              accountEffects.push({
+                type: 'account_debited',
+                account: fromAccount,
+                amount: formattedAmount,
+                asset_code: assetCode,
+                asset_type: 'credit_alphanum12',
+                contractId
+              });
+              // Credit to receiver
+              accountEffects.push({
+                type: 'account_credited',
+                account: toAccount,
+                amount: formattedAmount,
+                asset_code: assetCode,
+                asset_type: 'credit_alphanum12',
+                contractId
+              });
+            }
+            break;
+        }
+      }
+
+      return accountEffects;
+    };
+
+    // Add account effects from all transaction events
+
+    const eventAccountEffects = await convertEventsToAccountEffects(events);
+
+    // Debug logging
+    if (eventAccountEffects.length > 0) {
+    } else {
+    }
+
+    effects.push(...eventAccountEffects);
+
     const sourceAccount = extractAccountAddress(tx.source_account);
+
+    // Enrich operations with actual offer IDs from effects or XDR
+    const txMetaXdr = (tx as any).result_meta_xdr;
+    const enrichedOperations = await Promise.all(operations.records.map(async (op: any, opIndex: number) => {
+
+      if ((op.type === 'manage_sell_offer' || op.type === 'manage_buy_offer') &&
+        (String(op.offer_id) === '0' || !op.offer_id)) {
+
+        // Try to get offer ID from various effect types
+        const offerEffect = effects.find((eff: any) =>
+          eff.operation === op.id &&
+          (eff.type === 'trade' || eff.type === 'manage_offer')
+        );
+
+        if (offerEffect && offerEffect.offer_id) {
+          return { ...op, offer_id: String(offerEffect.offer_id), _enriched: true };
+        }
+
+        // If effects didn't provide the offer ID, try extracting from result meta XDR
+        if (txMetaXdr) {
+          const xdrOfferId = extractOfferIdFromXdr(txMetaXdr, opIndex);
+          if (xdrOfferId) {
+            return { ...op, offer_id: xdrOfferId, _enriched: true };
+          }
+        }
+
+        // Try extracting from result_xdr (ManageOfferSuccessResult)
+        const txResultXdr = (tx as any).result_xdr;
+        if (txResultXdr) {
+          const resultOfferId = extractOfferIdFromResultXdr(txResultXdr, opIndex);
+          if (resultOfferId) {
+            return { ...op, offer_id: resultOfferId, _enriched: true };
+          }
+        }
+
+        // Fallback: Query active offers for the account
+        // This handles cases (like Testnet) where XDR/effects might not link clearly
+        try {
+          if (server) {
+            const accountToQuery = op.source_account || sourceAccount;
+            const offers = await server.offers()
+              .forAccount(accountToQuery)
+              .order('desc')
+              .limit(50)
+              .call();
+
+
+            // Find offer created/modified in this transaction's ledger
+            // The ledger number is the most reliable link we have here
+            const txLedger = Number(tx.ledger);
+            const matchingOffer = offers.records.find(offer =>
+              Number(offer.last_modified_ledger) === txLedger
+            );
+
+            if (matchingOffer) {
+              return { ...op, offer_id: matchingOffer.id, _enriched: true };
+            } else {
+              if (offers.records.length > 0) {
+              }
+            }
+          } else {
+          }
+        } catch (err) {
+          // Silently fail fallback and return original op
+        }
+      }
+      return op;
+    }));
+
+    // Extract all state changes from Soroban operations only (not classic operations)
+    let allStateChanges: StateChange[] = [];
+    try {
+      if ((tx as any).result_meta_xdr) {
+        const meta = StellarSdk.xdr.TransactionMeta.fromXDR((tx as any).result_meta_xdr, 'base64');
+
+        // Extract state changes only from Soroban operations
+        for (let opIndex = 0; opIndex < enrichedOperations.length; opIndex++) {
+          const operation = enrichedOperations[opIndex];
+          // Only extract state changes for Soroban operations
+          if (operation.type === 'invoke_host_function' || operation.type === 'invokeHostFunction') {
+            const metaDetails = extractMetaDetails(meta, opIndex);
+            if (metaDetails.stateChanges && metaDetails.stateChanges.length > 0) {
+              allStateChanges.push(...metaDetails.stateChanges.map(change => ({
+                ...change,
+                operationIndex: opIndex
+              })));
+            }
+          }
+        }
+      }
+    } catch (error) {
+    }
 
     const result: TransactionDetails = {
       hash: tx.hash,
@@ -820,25 +1741,32 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
       fee: String((tx as any).fee_charged || (tx as any).fee_paid || '0'),
       feeCharged: String((tx as any).fee_charged || (tx as any).fee_paid || '0'),
       maxFee: String(tx.max_fee || '0'),
-      operations: operations.records,
+      operations: enrichedOperations,
       status: tx.successful ? 'success' : 'failed',
       sorobanOperations,
       events,
       effects,
+      allStateChanges,
       ledgerTimestamp: new Date(tx.created_at).getTime()
     };
+
+    // Always populate debugInfo with XDR data (needed for offer ID extraction)
+    try {
+      result.debugInfo = await decodeTransactionXdr(tx);
+    } catch (xdrError) {
+      // If decoding fails, at least populate the raw XDR
+      result.debugInfo = {
+        resultXdr: tx.result_xdr,
+        envelopeXdr: tx.envelope_xdr,
+        metaXdr: tx.result_meta_xdr || resultMetaXdr
+      };
+    }
 
     // Add error information for failed transactions
     if (!tx.successful) {
       result.errorMessage = (tx as any).result_codes?.transaction;
       result.operationErrors = (tx as any).result_codes?.operations || [];
       result.resultCodes = (tx as any).result_codes;
-
-      // Try to decode XDR for better error analysis
-      try {
-        result.debugInfo = await decodeTransactionXdr(tx);
-      } catch (xdrError) {
-      }
     }
 
     // Add simulation result for Soroban transactions
@@ -857,10 +1785,51 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
         };
       } catch (simError) {
       }
+
+      // Parse contract invocations from events
+      try {
+        const { parseContractInvocations } = await import('./contractInvocationParser');
+        result.contractInvocations = parseContractInvocations(events, tx.source_account);
+      } catch (invocationError) {
+      }
     }
     return result;
 
   } catch (error: any) {
+    // Check if it's an HTTP error from our fetchWithTimeout
+    if (error.message?.includes('HTTP 404')) {
+      // Check if transaction exists on the opposite network
+      const currentNetwork = networkConfig.isTestnet ? 'Testnet' : 'Mainnet';
+      const oppositeNetwork = networkConfig.isTestnet ? 'Mainnet' : 'Testnet';
+      const oppositeUrl = networkConfig.isTestnet
+        ? 'https://horizon.stellar.org'
+        : 'https://horizon-testnet.stellar.org';
+
+      try {
+        const oppositeResponse = await fetchWithTimeout(`${oppositeUrl}/transactions/${hash}`, 5000);
+        if (oppositeResponse.ok) {
+          throw new Error(`Transaction not found on ${currentNetwork}. This transaction exists on ${oppositeNetwork}. Please switch networks and try again.`);
+        }
+      } catch (checkError: any) {
+        // If the check fails or times out, just show the standard error
+        if (checkError.message?.includes('exists on')) {
+          throw checkError; // Re-throw our custom error
+        }
+      }
+
+      throw new Error('Transaction not found (404). Please verify the transaction hash and network selection.');
+    }
+    if (error.message?.includes('HTTP 500') || error.message?.includes('HTTP 502') || error.message?.includes('HTTP 503')) {
+      throw new Error('Horizon server error. The server is temporarily unavailable. Please try again later.');
+    }
+    if (error.message?.includes('timeout')) {
+      throw new Error('Request timeout. The server took too long to respond. Please try again.');
+    }
+    // Check for network/fetch failures
+    if (error.name === 'TypeError' && error.message?.includes('fetch')) {
+      throw new Error('Network error. Unable to connect to Horizon server. Please check your internet connection.');
+    }
+    // Generic error
     throw new Error(`Failed to fetch transaction: ${error.message}`);
   }
 };
@@ -916,7 +1885,7 @@ const scValToNative = (scVal: any): any => {
           } else if (addrType === 'scAddressTypeContract') {
             return StellarSdk.StrKey.encodeContract(address.contractId());
           }
-        } catch {}
+        } catch { }
         return 'Address';
       case 'scvLedgerKeyContractInstance':
         return 'ContractInstance';
@@ -933,7 +1902,7 @@ const scValToNative = (scVal: any): any => {
 const querySorobanRpc = async (hash: string) => {
   const rpcUrl = networkConfig.isTestnet
     ? 'https://soroban-testnet.stellar.org'
-    : 'https://mainnet.sorobanrpc.com';
+    : 'https://soroban-rpc.mainnet.stellar.gateway.fm';
 
   const response = await fetch(rpcUrl, {
     method: 'POST',
@@ -960,30 +1929,16 @@ const querySorobanRpc = async (hash: string) => {
     throw new Error(`Soroban RPC error: ${data.error.message}`);
   }
 
-  // Log all field names to find the meta XDR
-  if (data.result) {
-    Object.keys(data.result).forEach(key => {
-      const value = data.result[key];
-      const type = typeof value;
-      const preview = type === 'string' ? (value.length > 50 ? `${value.substring(0, 50)}...` : value) : type;
-    });
-
-    // Check if status is SUCCESS and resultMetaXdr exists
-    if (data.result.status === 'SUCCESS' && data.result.resultMetaXdr) {
-    } else if (data.result.status === 'NOT_FOUND') {
-    } else if (data.result.status === 'FAILED') {
-    }
-  }
 
   return data.result;
 };
 
 const extractContractId = async (operation: any, sorobanData: any, operationIndex: number, transactionHash?: string, envelopeXdr?: string): Promise<string> => {
-  
+
   if (operation.type !== 'invoke_host_function') {
     return `Non_Contract_Op${operationIndex + 1}`;
   }
-  
+
   // Method 0: Direct field extraction with extensive logging
   const directFields = [
     'contract_id', 'contractId', 'contract_address', 'contractAddress',
@@ -1021,18 +1976,18 @@ const extractContractId = async (operation: any, sorobanData: any, operationInde
       }
     }
   }
-  
+
   // Method 1: Host function field extraction
   if (operation.type === 'invoke_host_function' && operation.host_function) {
     try {
       const hostFunctionXdr = operation.host_function;
-      
+
       const hostFunction = StellarSdk.xdr.HostFunction.fromXDR(hostFunctionXdr, 'base64');
-      
+
       if (hostFunction.switch() === StellarSdk.xdr.HostFunctionType.hostFunctionTypeInvokeContract()) {
         const invokeContract = hostFunction.invokeContract();
         const contractAddress = invokeContract.contractAddress();
-        
+
         if (contractAddress.switch() === StellarSdk.xdr.ScAddressType.scAddressTypeContract()) {
           const contractId = Buffer.from(Array.from(contractAddress.contractId() as any));
           const contractIdStr = StellarSdk.StrKey.encodeContract(contractId);
@@ -1042,7 +1997,7 @@ const extractContractId = async (operation: any, sorobanData: any, operationInde
     } catch (hostFunctionError) {
     }
   }
-  
+
   // Method 2: Parameters extraction
   if (operation.parameters) {
     try {
@@ -1059,7 +2014,7 @@ const extractContractId = async (operation: any, sorobanData: any, operationInde
 
   // Method 3: Soroban RPC data
   if (sorobanData) {
-    
+
     try {
       if (sorobanData.createContractResult?.contractId) {
         return sorobanData.createContractResult.contractId;
@@ -1067,7 +2022,7 @@ const extractContractId = async (operation: any, sorobanData: any, operationInde
 
       if (sorobanData.results && sorobanData.results[operationIndex]) {
         const opResult = sorobanData.results[operationIndex];
-        
+
         if (opResult.contractId) {
           return opResult.contractId;
         }
@@ -1123,11 +2078,11 @@ const extractContractId = async (operation: any, sorobanData: any, operationInde
     }
   } catch (xdrError) {
   }
-  
+
   if (!networkConfig.isTestnet) {
     return `Mainnet_Contract_Op${operationIndex + 1}`;
   }
-  
+
   return `Unknown_Contract_Op${operationIndex + 1}`;
 };
 
@@ -1150,7 +2105,7 @@ const formatEffectDescription = (effect: any, contractId: string): string => {
     case 'account_debited':
       return `Debited: ${formatAmount(effect.amount)} ${effect.asset_code || 'XLM'} from ${formatAddress(effect.account)}`;
     default:
-      return `${effect.type.replace(/_/g, ' ')}: ${JSON.stringify(effect).substring(0, 50)}...`;
+      return `${effect.type.replace(/_/g, ' ')}: ${safeStringify(effect).substring(0, 50)}...`;
   }
 };
 
@@ -1175,10 +2130,10 @@ const findContractIdInObject = (obj: any, visited = new Set()): string | null =>
       'invoke_contract', 'host_function', 'soroban_operation',
       'contract_call', 'function_call', 'smart_contract'
     ];
-    
+
     for (const field of contractFields) {
-      if (obj[field] && typeof obj[field] === 'string' && 
-          /^C[A-Z2-7]{55,62}$/.test(obj[field])) {
+      if (obj[field] && typeof obj[field] === 'string' &&
+        /^C[A-Z2-7]{55,62}$/.test(obj[field])) {
         return obj[field];
       }
     }
@@ -1232,7 +2187,6 @@ const extractFunctionDetails = (operation: any, sorobanData: any, operationIndex
 
       // Extract diagnostic events from XDR if available
       if (sorobanData.diagnosticEventsXdr) {
-
         try {
           // diagnosticEventsXdr is an array of base64 XDR strings, one per event
           const eventsXdrArray = Array.isArray(sorobanData.diagnosticEventsXdr)
@@ -1255,7 +2209,7 @@ const extractFunctionDetails = (operation: any, sorobanData: any, operationIndex
                 } catch {
                   // Fallback to string representation
                   try {
-                    return JSON.stringify(topic);
+                    return safeStringify(topic);
                   } catch {
                     return String(topic);
                   }
@@ -1344,23 +2298,92 @@ const extractFunctionDetails = (operation: any, sorobanData: any, operationIndex
       const meta = StellarSdk.xdr.TransactionMeta.fromXDR(tx.result_meta_xdr, 'base64');
       const metaSwitch = meta.switch();
       const metaDetails = extractMetaDetails(meta, operationIndex, knownContractId);
-      // DON'T append metaDetails.events - we already extracted them from diagnosticEventsXdr above
-      // details.events = [...details.events, ...metaDetails.events];
+
+      // If we didn't get events from diagnosticEventsXdr, use events from meta
+      if (details.events.length === 0 && metaDetails.events.length > 0) {
+        details.events = metaDetails.events;
+      }
+
       details.stateChanges = metaDetails.stateChanges;
       details.ttlExtensions = metaDetails.ttlExtensions;
       details.resourceUsage = metaDetails.resourceUsage;
       details.crossContractCalls = metaDetails.crossContractCalls;
     } catch (error) {
     }
-  } else {
   }
 
   return details;
 };
 
-// Helper to extract data from a single ledger entry
-const extractSingleEntryData = (ledgerEntry: any) => {
+// Helper to extract data from a single ledger entry or ledger key (for removals)
+const extractSingleEntryData = (ledgerEntry: any, isRemoved: boolean = false) => {
   if (!ledgerEntry) return null;
+
+  // For removed entries, we have a LedgerKey (not LedgerEntry), so handle differently
+  if (isRemoved || !ledgerEntry.data) {
+    // This is a LedgerKey - extract key information only
+    try {
+      const keyType = ledgerEntry.switch().name;
+
+      if (keyType === 'contractData') {
+        const contractDataKey = ledgerEntry.contractData();
+
+        // Extract contract ID
+        let contractId: string | null = null;
+        try {
+          const contract = contractDataKey.contract();
+          const contractAddress = contract.switch().name;
+
+          if (contractAddress === 'scAddressTypeContract') {
+            contractId = StellarSdk.StrKey.encodeContract(contract.contractId());
+          } else if (contractAddress === 'scAddressTypeAccount') {
+            contractId = StellarSdk.StrKey.encodeEd25519PublicKey(contract.accountId().ed25519());
+          }
+        } catch (e) { }
+
+        const durability = contractDataKey.durability().name;
+        const storageType = durability === 'temporary' ? 'temporary' : durability === 'persistent' ? 'persistent' : 'instance';
+
+        // Decode the key
+        const keyScVal = contractDataKey.key();
+        let decodedKey: any;
+        try {
+          const keyType = keyScVal.switch?.()?.name || keyScVal._switch?.name;
+          if (keyType === 'scvLedgerKeyContractInstance') {
+            decodedKey = 'ContractInstance';
+          } else {
+            decodedKey = decodeScVal(keyScVal);
+          }
+        } catch (e) {
+          decodedKey = decodeScVal(keyScVal);
+        }
+
+        const keyDisplay = Array.isArray(decodedKey)
+          ? `[${decodedKey.map(k => typeof k === 'string' && k.includes('sym') ? `"${k}"` : String(k)).join(', ')}]`
+          : String(decodedKey);
+
+        return {
+          type: 'contractData',
+          contractId,
+          key: decodedKey,
+          keyDisplay,
+          data: null, // No data for removed entries
+          storageType
+        };
+      }
+
+      // Handle other key types as needed
+      return {
+        type: keyType,
+        key: null,
+        keyDisplay: `<${keyType}>`,
+        data: null,
+        storageType: 'unknown'
+      };
+    } catch (err) {
+      return null;
+    }
+  }
 
   const entryData = ledgerEntry.data();
   const entryType = entryData.switch().name;
@@ -1368,7 +2391,23 @@ const extractSingleEntryData = (ledgerEntry: any) => {
   // Handle contract data entries
   if (entryType === 'contractData') {
     const contractData = entryData.contractData();
-    const contractId = StellarSdk.StrKey.encodeContract(contractData.contract().contractId());
+
+    // Try to get contractId - handle both contract types and SAC (Stellar Asset Contract)
+    let contractId: string | null = null;
+    try {
+      const contract = contractData.contract();
+      const contractAddress = contract.switch().name;
+
+      if (contractAddress === 'scAddressTypeContract') {
+        contractId = StellarSdk.StrKey.encodeContract(contract.contractId());
+      } else if (contractAddress === 'scAddressTypeAccount') {
+        // This is a SAC entry for a classic account
+        contractId = StellarSdk.StrKey.encodeEd25519PublicKey(contract.accountId().ed25519());
+      }
+    } catch (e) {
+      // Continue anyway - we'll show what we can
+    }
+
     const durability = contractData.durability().name;
     const storageType = durability === 'temporary' ? 'temporary' : durability === 'persistent' ? 'persistent' : 'instance';
 
@@ -1393,77 +2432,250 @@ const extractSingleEntryData = (ledgerEntry: any) => {
 
     // Decode the value if present
     let decodedVal = null;
+    let valScVal = null;
     try {
-      const valScVal = contractData.val();
+      valScVal = contractData.val();
       decodedVal = decodeScVal(valScVal);
     } catch (e) {
       // Value might not be present or decodable
     }
 
-    // Helper to format a key value (handles serialized buffers)
-    const formatKeyValue = (k: any): string => {
-      if (k === null || k === undefined) return 'undefined';
-      if (typeof k === 'string') return `"${k}"`;
-      if (typeof k === 'number' || typeof k === 'boolean') return String(k);
+    // Helper to get the correct type suffix from ScVal XDR
+    const getScValType = (scVal: any, value: any): string => {
+      if (!scVal || !scVal.switch) return '';
 
-      // Check for serialized buffer
-      if (typeof k === 'object' && isSerializedBuffer(k)) {
-        const bytes = serializedBufferToUint8Array(k);
-        if (bytes.length === 32) {
-          try {
-            const addr = StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(bytes));
-            return `"${addr.substring(0, 4)}…${addr.substring(addr.length - 4)}"`;
-          } catch {
-            try {
-              const addr = StellarSdk.StrKey.encodeContract(Buffer.from(bytes));
-              return `"${addr.substring(0, 6)}…${addr.substring(addr.length - 6)}"`;
-            } catch {
-              const hex = Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join('');
-              return `"0x${hex.slice(0, 8)}…${hex.slice(-8)}"`;
-            }
-          }
+      try {
+        const typeName = scVal.switch().name;
+        switch (typeName) {
+          case 'scvU32': return 'u32';
+          case 'scvI32': return 'i32';
+          case 'scvU64': return 'u64';
+          case 'scvI64': return 'i64';
+          case 'scvU128': return 'u128';
+          case 'scvI128': return 'i128';
+          case 'scvU256': return 'u256';
+          case 'scvI256': return 'i256';
+          case 'scvBool': return 'bool';
+          case 'scvSymbol': return 'sym';
+          case 'scvString': return 'sym';
+          case 'scvBytes': return 'bytes';
+          default: return '';
         }
-        const hex = Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join('');
-        if (hex.length > 20) {
-          return `"0x${hex.slice(0, 8)}…${hex.slice(-8)}"`;
+      } catch (e) {
+        // Fallback to value-based detection
+        if (typeof value === 'number') {
+          return value <= 4294967295 ? 'u32' : 'u64';
         }
-        return `"0x${hex}"`;
+        if (typeof value === 'bigint') return 'i128';
+        if (typeof value === 'boolean') return 'bool';
+        if (typeof value === 'string') return 'sym';
+        return '';
       }
-
-      if (typeof k === 'object') return JSON.stringify(k);
-      return String(k);
     };
 
-    // Format key display
-    let keyDisplay = '';
-    if (decodedKey === null || decodedKey === undefined) {
-      // If key couldn't be decoded, check if this is a special entry type
-      keyDisplay = '<Unknown Key>';
-    } else if (decodedKey === 'ContractInstance' || decodedKey === 'LedgerKeyContractInstance') {
-      keyDisplay = '<LedgerKeyContractInstance>';
-    } else if (Array.isArray(decodedKey)) {
-      keyDisplay = `[${decodedKey.map(formatKeyValue).join(', ')}]`;
-    } else if (typeof decodedKey === 'object' && decodedKey !== null) {
-      // Check if it's a serialized buffer
-      if (isSerializedBuffer(decodedKey)) {
-        keyDisplay = formatKeyValue(decodedKey);
-      } else {
-        keyDisplay = JSON.stringify(decodedKey);
+    // Format value display directly from ScVal to preserve type information
+    const formatValueFromScVal = (scVal: any): string => {
+      if (!scVal) return '()';
+
+      try {
+        const typeName = scVal.switch?.()?.name || scVal._switch?.name;
+
+        switch (typeName) {
+          case 'scvVoid':
+            return '()';
+
+          case 'scvBool':
+            return `${scVal.b() ? 'true' : 'false'}bool`;
+
+          case 'scvU32':
+            return `${scVal.u32()}u32`;
+
+          case 'scvI32':
+            return `${scVal.i32()}i32`;
+
+          case 'scvU64': {
+            const val = scVal.u64();
+            return `${val.toString()}u64`;
+          }
+
+          case 'scvI64': {
+            const val = scVal.i64();
+            return `${val.toString()}i64`;
+          }
+
+          case 'scvU128': {
+            const parts = scVal.u128();
+            const lo = BigInt(parts.lo().toString());
+            const hi = BigInt(parts.hi().toString());
+            const val = (hi << 64n) | lo;
+            return `${val.toString()}u128`;
+          }
+
+          case 'scvI128': {
+            const parts = scVal.i128();
+            const lo = BigInt(parts.lo().toString());
+            const hi = BigInt(parts.hi().toString());
+            const val = (hi << 64n) | lo;
+            return `${val.toString()}i128`;
+          }
+
+          case 'scvSymbol':
+            return `"${scVal.sym().toString()}"sym`;
+
+          case 'scvString':
+            return `"${scVal.str().toString()}"sym`;
+
+          case 'scvBytes': {
+            const bytes = scVal.bytes();
+            // Show as hex for better readability
+            const hex = Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join('');
+            // Truncate if too long
+            if (hex.length > 64) {
+              return `0x${hex.substring(0, 32)}...${hex.substring(hex.length - 32)}`;
+            }
+            return `0x${hex}`;
+          }
+
+          case 'scvVec': {
+            const vec = scVal.vec();
+            if (!vec || vec.length === 0) return '[]';
+            const items = vec.map((item: any) => formatValueFromScVal(item));
+            return `[${items.join(', ')}]`;
+          }
+
+          case 'scvMap': {
+            const map = scVal.map();
+            if (!map || map.length === 0) return '{}';
+            const entries = map.map((entry: any) => {
+              const key = formatValueFromScVal(entry.key());
+              const val = formatValueFromScVal(entry.val());
+              // Clean up key formatting - remove quotes and sym suffix for cleaner display
+              const cleanKey = key.replace(/^"(.+)"sym$/, '$1');
+              return `  ${cleanKey}: ${val}`;
+            });
+            return `{\n${entries.join(',\n')}\n}`;
+          }
+
+          case 'scvAddress': {
+            try {
+              // Decode the full address without shortening
+              const decoded = decodeScVal(scVal);
+              if (typeof decoded === 'string' && (decoded.startsWith('G') || decoded.startsWith('C'))) {
+                return decoded;
+              }
+              return decoded || '(address)';
+            } catch (e) {
+              return '(address)';
+            }
+          }
+
+          case 'scvContractInstance': {
+            // Format contract instance with WASM hash only (skip storage to avoid showing internal XDR)
+            try {
+              const instance = scVal.instance();
+              const parts: string[] = [];
+
+              // Try to get the executable (WASM hash)
+              try {
+                const executable = instance.executable();
+                const execSwitch = executable.switch?.()?.name || executable._switch?.name;
+                if (execSwitch === 'contractExecutableWasm') {
+                  const wasmHash = executable.wasmHash();
+                  if (wasmHash) {
+                    const hashBytes = wasmHash instanceof Uint8Array ? wasmHash : new Uint8Array(Object.values(wasmHash));
+                    const hash = Array.from(hashBytes).map((b: number) => b.toString(16).padStart(2, '0')).join('');
+                    parts.push(`wasm: ${hash}`);
+                  }
+                } else if (execSwitch === 'contractExecutableStellarAsset') {
+                  parts.push('executable: StellarAsset');
+                }
+              } catch (e) {
+                // Executable might not be accessible
+              }
+
+              // Storage is skipped because it contains complex nested XDR structures
+              // that are difficult to display cleanly
+
+              return parts.length > 0 ? `ContractInstance{${parts.join(', ')}}` : 'ContractInstance{}';
+            } catch (e) {
+              return 'ContractInstance{}';
+            }
+          }
+
+          case 'scvLedgerKeyContractInstance':
+            return 'ContractInstance';
+
+          default:
+            // Fallback to decoding
+            const decoded = decodeScVal(scVal);
+            if (decoded === null || decoded === undefined || decoded === '()') {
+              return '()';
+            }
+            // If decoded is an object, try to format it as JSON
+            if (typeof decoded === 'object') {
+              try {
+                return JSON.stringify(decoded, (key, val) =>
+                  typeof val === 'bigint' ? val.toString() : val
+                );
+              } catch {
+                return String(decoded);
+              }
+            }
+            return String(decoded);
+        }
+      } catch (e) {
+        // Fallback to decoding
+        try {
+          const decoded = decodeScVal(scVal);
+          if (decoded === null || decoded === undefined) return '()';
+          if (typeof decoded === 'string') return `"${decoded}"sym`;
+          if (typeof decoded === 'number') return `${decoded}u32`;
+          if (typeof decoded === 'bigint') return `${decoded}i128`;
+          if (typeof decoded === 'boolean') return `${decoded}bool`;
+          return JSON.stringify(decoded);
+        } catch (e2) {
+          return '(error)';
+        }
       }
+
+      return '()';
+    };
+
+    // Format key display directly from ScVal to preserve types
+    let keyDisplay = '';
+    if (isLedgerKeyContractInstance) {
+      keyDisplay = '<LedgerKeyContractInstance>';
+    } else if (keyScVal) {
+      // Use formatValueFromScVal to preserve type information
+      const formattedKey = formatValueFromScVal(keyScVal);
+      // Special case: if it's a nonce key (just shows as a u64 number), display it with the value
+      if (/^\d+u64$/.test(formattedKey)) {
+        keyDisplay = `Nonce: ${formattedKey}`;
+      } else {
+        keyDisplay = formattedKey;
+      }
+    } else if (decodedKey === null || decodedKey === undefined) {
+      keyDisplay = '<Unknown Key>';
     } else {
-      // String, number, or other primitive
-      keyDisplay = `["${String(decodedKey)}"]`;
+      keyDisplay = String(decodedKey);
     }
 
-    return {
+    let valueDisplay = '';
+    if (valScVal) {
+      valueDisplay = formatValueFromScVal(valScVal);
+    }
+
+    const result = {
       type: 'contractData',
       contractId,
       storageType,
       key: decodedKey,
       data: decodedVal,
       keyDisplay,
+      valueDisplay,
       before: undefined
     };
+    return result;
   }
 
   // Handle contract code entries (WASM bytecode)
@@ -1476,8 +2688,79 @@ const extractSingleEntryData = (ledgerEntry: any) => {
       storageType: 'persistent',
       key: 'ContractCode',
       keyDisplay: '<LedgerKeyContractCode>',
+      valueDisplay: `<WASM Hash: ${hash.toString('hex')}>`,
       hash: hash.toString('hex'),
       data: { hash: hash.toString('hex') },
+      before: undefined
+    };
+  }
+
+  // Handle trustline entries (classic Stellar asset transfers)
+  if (entryType === 'trustLine') {
+    const trustLine = entryData.trustLine();
+    const accountId = StellarSdk.StrKey.encodeEd25519PublicKey(trustLine.accountId().ed25519());
+    const asset = trustLine.asset();
+
+    let assetCode = '';
+    let assetIssuer = '';
+
+    try {
+      const assetType = asset.switch().name;
+      if (assetType === 'assetTypeNative') {
+        assetCode = 'XLM';
+        assetIssuer = 'native';
+      } else if (assetType === 'assetTypeCreditAlphanum4') {
+        const credit = asset.alphaNum4();
+        assetCode = credit.assetCode().toString('utf8').replace(/\0/g, '');
+        assetIssuer = StellarSdk.StrKey.encodeEd25519PublicKey(credit.issuer().ed25519());
+      } else if (assetType === 'assetTypeCreditAlphanum12') {
+        const credit = asset.alphaNum12();
+        assetCode = credit.assetCode().toString('utf8').replace(/\0/g, '');
+        assetIssuer = StellarSdk.StrKey.encodeEd25519PublicKey(credit.issuer().ed25519());
+      }
+    } catch (e) {
+    }
+
+    const balance = trustLine.balance();
+
+    return {
+      type: 'trustLine',
+      contractId: accountId,
+      storageType: 'persistent',
+      key: `${assetCode}:${assetIssuer}`,
+      keyDisplay: `TrustLine[${assetCode}]`,
+      valueDisplay: `Balance: ${balance.toString()}`,
+      data: {
+        accountId,
+        assetCode,
+        assetIssuer,
+        balance: balance.toString()
+      },
+      before: undefined
+    };
+  }
+
+  // Handle TTL (Time To Live) entries
+  if (entryType === 'ttl') {
+    const ttlEntry = entryData.ttl();
+    let liveUntilLedgerSeq = null;
+    let keyHash = null;
+
+    try {
+      liveUntilLedgerSeq = ttlEntry.liveUntilLedgerSeq();
+      keyHash = ttlEntry.keyHash();
+    } catch (e) {
+      // TTL data might not be accessible
+    }
+
+    return {
+      type: 'ttl',
+      contractId: null,
+      storageType: 'temporary',
+      key: 'TTL',
+      keyDisplay: '<LedgerKeyTTL>',
+      valueDisplay: liveUntilLedgerSeq ? `TTL expires at ledger: ${liveUntilLedgerSeq}` : 'TTL Extension',
+      data: { liveUntilLedgerSeq, keyHash: keyHash?.toString('hex') },
       before: undefined
     };
   }
@@ -1492,43 +2775,45 @@ const extractLedgerEntryData = (change: any, changeType: string) => {
     let beforeEntry = null;
 
     // Get the ledger entry based on change type
-    if (changeType === 'ledgerEntryState') {
-      ledgerEntry = change.state();
+    if (changeType === 'ledgerEntryRestored') {
+      try {
+        ledgerEntry = change.restored();
+      } catch (e) {
+        try {
+          ledgerEntry = change.state();
+        } catch (e2) {
+        }
+      }
     } else if (changeType === 'ledgerEntryCreated') {
       ledgerEntry = change.created();
     } else if (changeType === 'ledgerEntryUpdated') {
-      // For updated entries, capture BOTH before and after values
-      const updated = change.updated();
-
-      // Get the previous state (before)
-      if (updated && updated.state) {
-        try {
-          beforeEntry = updated.state();
-        } catch (e) {
-          // Previous state might not be available
-        }
-      }
-
-      // Get the new state (after)
-      if (updated && updated.newValue) {
-        ledgerEntry = updated.newValue();
-      } else {
-        // Fallback: some SDK versions might return the entry directly
-        ledgerEntry = updated;
-      }
+      // For updated entries, ledgerEntryUpdated contains the "after" state
+      // The "before" state comes from a ledgerEntryState change (handled separately)
+      ledgerEntry = change.updated();
     } else if (changeType === 'ledgerEntryRemoved') {
       ledgerEntry = change.removed();
+    } else if (changeType === 'ledgerEntryState') {
+      // Handle ledgerEntryState - these are state snapshots
+      try {
+        ledgerEntry = change.state();
+      } catch (e) {
+      }
     } else {
     }
 
-    if (!ledgerEntry) return null;
+    if (!ledgerEntry) {
+      return null;
+    }
 
-    const entryInfo = extractSingleEntryData(ledgerEntry);
-    if (!entryInfo) return null;
+    const isRemoval = changeType === 'ledgerEntryRemoved';
+    const entryInfo = extractSingleEntryData(ledgerEntry, isRemoval);
+    if (!entryInfo) {
+      return null;
+    }
 
     // For updates, also extract the before value
     if (beforeEntry && changeType === 'ledgerEntryUpdated') {
-      const beforeInfo = extractSingleEntryData(beforeEntry);
+      const beforeInfo = extractSingleEntryData(beforeEntry, false);
       if (beforeInfo && beforeInfo.data !== undefined) {
         entryInfo.before = beforeInfo.data;
       }
@@ -1586,43 +2871,87 @@ const extractMetaDetails = (meta: any, operationIndex: number, knownContractId?:
             if (operation.changes && operation.changes()) {
               const changes = operation.changes();
 
-              changes.forEach((change: any, idx: number) => {
+              // Map to store state entries (before values) by key
+              const stateEntries = new Map<string, any>();
+
+              // ALSO process transaction-level changes if this is the first operation
+              // These contain changes like trustlines modified by auth sub-invocations
+              const allChanges = [...changes];
+              if (operationIndex === 0) {
+                try {
+                  if (v3.txChanges && v3.txChanges()) {
+                    const txChanges = v3.txChanges();
+                    allChanges.push(...txChanges);
+                  }
+                } catch (e) {
+                }
+              }
+
+              allChanges.forEach((change: any, idx: number) => {
                 try {
                   const changeType = change.switch().name;
+
                   const ledgerEntry = extractLedgerEntryData(change, changeType);
 
-                  if (ledgerEntry) {
-                    const isRemoval = changeType === 'ledgerEntryRemoved';
-                    const isCreated = changeType === 'ledgerEntryCreated';
-                    const isUpdated = changeType === 'ledgerEntryUpdated';
-
-                    const actionType = isRemoval ? 'removed' : isCreated ? 'created' : 'updated';
-
-                    const stateChange: any = {
-                      type: actionType,
-                      changeType: changeType,
-                      ledgerEntryType: ledgerEntry.type,
-                      contractId: ledgerEntry.contractId,
-                      storageType: ledgerEntry.storageType,
-                      key: ledgerEntry.key,
-                      keyDisplay: ledgerEntry.keyDisplay,
-                      description: `${actionType} ${ledgerEntry.storageType || ledgerEntry.type} data ${ledgerEntry.keyDisplay || ''}`
-                    };
-
-                    // Add before/after values
-                    if (isUpdated) {
-                      stateChange.before = ledgerEntry.before;
-                      stateChange.after = ledgerEntry.data;
-                    } else if (isCreated) {
-                      stateChange.after = ledgerEntry.data;
-                    } else if (isRemoval) {
-                      stateChange.before = ledgerEntry.data;
-                    } else {
-                      stateChange.value = ledgerEntry.data;
-                    }
-
-                    details.stateChanges.push(stateChange);
+                  if (!ledgerEntry) {
+                    return;
                   }
+
+                  const isRemoval = changeType === 'ledgerEntryRemoved';
+                  const isCreated = changeType === 'ledgerEntryCreated';
+                  const isUpdated = changeType === 'ledgerEntryUpdated';
+                  const isRestored = changeType === 'ledgerEntryRestored';
+                  const isState = changeType === 'ledgerEntryState';
+
+                  if (isState) {
+                    // Store state entry and skip adding to stateChanges
+                    const entryKey = ledgerEntry.keyDisplay || JSON.stringify(ledgerEntry.key);
+                    stateEntries.set(entryKey, ledgerEntry);
+                    return; // Skip this entry - it will be merged with the updated entry
+                  }
+
+                  const actionType = isRemoval ? 'removed' : isCreated ? 'created' : isRestored ? 'restored' : 'updated';
+
+                  const stateChange: any = {
+                    type: actionType,
+                    changeType: changeType,
+                    ledgerEntryType: ledgerEntry.type,
+                    contractId: ledgerEntry.contractId,
+                    storageType: ledgerEntry.storageType,
+                    key: ledgerEntry.key,
+                    keyDisplay: ledgerEntry.keyDisplay,
+                    valueDisplay: ledgerEntry.valueDisplay,
+                    description: `${actionType} ${ledgerEntry.storageType || ledgerEntry.type} data ${ledgerEntry.keyDisplay || ''}`
+                  };
+
+                  // Add before/after values with proper formatting
+                  if (isUpdated) {
+                    // Check if we have a stored state entry for this key
+                    const entryKey = ledgerEntry.keyDisplay || JSON.stringify(ledgerEntry.key);
+                    const stateEntry = stateEntries.get(entryKey);
+
+                    if (stateEntry) {
+                      stateChange.before = stateEntry.data;
+                      stateChange.beforeDisplay = stateEntry.valueDisplay;
+                    } else {
+                      stateChange.before = ledgerEntry.before;
+                    }
+                    stateChange.after = ledgerEntry.data;
+                    stateChange.afterDisplay = ledgerEntry.valueDisplay;
+                  } else if (isCreated) {
+                    stateChange.after = ledgerEntry.data;
+                    stateChange.afterDisplay = ledgerEntry.valueDisplay;
+                  } else if (isRemoval) {
+                    stateChange.before = ledgerEntry.data;
+                    stateChange.beforeDisplay = ledgerEntry.valueDisplay;
+                  } else if (isRestored) {
+                    stateChange.value = ledgerEntry.data;
+                    stateChange.valueDisplay = ledgerEntry.valueDisplay;
+                  } else {
+                    stateChange.value = ledgerEntry.data;
+                  }
+
+                  details.stateChanges.push(stateChange);
                 } catch (err) {
                 }
               });
@@ -2001,102 +3330,102 @@ const analyzeTransactionErrors = (transactionResult: any, isFeeBump: boolean = f
               codeType = 'unknown';
             }
 
-        if (codeType !== 'opInner' && codeType !== 'unknown') {
-          // Operation failed at the envelope level (e.g., opBadAuth, opNoSourceAccount)
-          analysis.operationErrors.push({
-            operation: index,
-            error: codeType,
-            description: getOperationErrorDescription(codeType)
-          });
-        } else if (codeType === 'opInner') {
-          // Operation succeeded at envelope level, check the inner result
-          try {
-            const tr = opResult.tr();
-
-            // Try different operation types based on the reference code pattern
-            let operationResult;
-            let operationType;
-
-            // Check for different operation result types using try-catch since accessing
-            // non-existent properties throws errors in the Stellar SDK
-            const resultGetters = [
-              { name: 'payment', getter: () => tr.paymentResult() },
-              { name: 'createAccount', getter: () => tr.createAccountResult() },
-              { name: 'manageBuyOffer', getter: () => tr.manageBuyOfferResult() },
-              { name: 'manageSellOffer', getter: () => tr.manageSellOfferResult() },
-              { name: 'changeTrust', getter: () => tr.changeTrustResult() },
-              { name: 'invokeHostFunction', getter: () => tr.invokeHostFunctionResult() },
-              { name: 'pathPaymentStrictReceive', getter: () => tr.pathPaymentStrictReceiveResult() },
-              { name: 'pathPaymentStrictSend', getter: () => tr.pathPaymentStrictSendResult() },
-              { name: 'setOptions', getter: () => tr.setOptionsResult() },
-              { name: 'allowTrust', getter: () => tr.allowTrustResult() },
-              { name: 'accountMerge', getter: () => tr.accountMergeResult() },
-              { name: 'inflation', getter: () => tr.inflationResult() },
-              { name: 'manageData', getter: () => tr.manageDataResult() },
-              { name: 'bumpSequence', getter: () => tr.bumpSequenceResult() },
-              { name: 'createClaimableBalance', getter: () => tr.createClaimableBalanceResult() },
-              { name: 'claimClaimableBalance', getter: () => tr.claimClaimableBalanceResult() },
-              { name: 'beginSponsoringFutureReserves', getter: () => tr.beginSponsoringFutureReservesResult() },
-              { name: 'endSponsoringFutureReserves', getter: () => tr.endSponsoringFutureReservesResult() },
-              { name: 'revokeSponsorship', getter: () => tr.revokeSponsorshipResult() },
-              { name: 'clawback', getter: () => tr.clawbackResult() },
-              { name: 'clawbackClaimableBalance', getter: () => tr.clawbackClaimableBalanceResult() },
-              { name: 'setTrustLineFlags', getter: () => tr.setTrustLineFlagsResult() },
-              { name: 'liquidityPoolDeposit', getter: () => tr.liquidityPoolDepositResult() },
-              { name: 'liquidityPoolWithdraw', getter: () => tr.liquidityPoolWithdrawResult() }
-            ];
-
-            for (const { name, getter } of resultGetters) {
+            if (codeType !== 'opInner' && codeType !== 'unknown') {
+              // Operation failed at the envelope level (e.g., opBadAuth, opNoSourceAccount)
+              analysis.operationErrors.push({
+                operation: index,
+                error: codeType,
+                description: getOperationErrorDescription(codeType)
+              });
+            } else if (codeType === 'opInner') {
+              // Operation succeeded at envelope level, check the inner result
               try {
-                operationResult = getter();
-                operationType = name;
-                break;
+                const tr = opResult.tr();
+
+                // Try different operation types based on the reference code pattern
+                let operationResult;
+                let operationType;
+
+                // Check for different operation result types using try-catch since accessing
+                // non-existent properties throws errors in the Stellar SDK
+                const resultGetters = [
+                  { name: 'payment', getter: () => tr.paymentResult() },
+                  { name: 'createAccount', getter: () => tr.createAccountResult() },
+                  { name: 'manageBuyOffer', getter: () => tr.manageBuyOfferResult() },
+                  { name: 'manageSellOffer', getter: () => tr.manageSellOfferResult() },
+                  { name: 'changeTrust', getter: () => tr.changeTrustResult() },
+                  { name: 'invokeHostFunction', getter: () => tr.invokeHostFunctionResult() },
+                  { name: 'pathPaymentStrictReceive', getter: () => tr.pathPaymentStrictReceiveResult() },
+                  { name: 'pathPaymentStrictSend', getter: () => tr.pathPaymentStrictSendResult() },
+                  { name: 'setOptions', getter: () => tr.setOptionsResult() },
+                  { name: 'allowTrust', getter: () => tr.allowTrustResult() },
+                  { name: 'accountMerge', getter: () => tr.accountMergeResult() },
+                  { name: 'inflation', getter: () => tr.inflationResult() },
+                  { name: 'manageData', getter: () => tr.manageDataResult() },
+                  { name: 'bumpSequence', getter: () => tr.bumpSequenceResult() },
+                  { name: 'createClaimableBalance', getter: () => tr.createClaimableBalanceResult() },
+                  { name: 'claimClaimableBalance', getter: () => tr.claimClaimableBalanceResult() },
+                  { name: 'beginSponsoringFutureReserves', getter: () => tr.beginSponsoringFutureReservesResult() },
+                  { name: 'endSponsoringFutureReserves', getter: () => tr.endSponsoringFutureReservesResult() },
+                  { name: 'revokeSponsorship', getter: () => tr.revokeSponsorshipResult() },
+                  { name: 'clawback', getter: () => tr.clawbackResult() },
+                  { name: 'clawbackClaimableBalance', getter: () => tr.clawbackClaimableBalanceResult() },
+                  { name: 'setTrustLineFlags', getter: () => tr.setTrustLineFlagsResult() },
+                  { name: 'liquidityPoolDeposit', getter: () => tr.liquidityPoolDepositResult() },
+                  { name: 'liquidityPoolWithdraw', getter: () => tr.liquidityPoolWithdrawResult() }
+                ];
+
+                for (const { name, getter } of resultGetters) {
+                  try {
+                    operationResult = getter();
+                    operationType = name;
+                    break;
+                  } catch (e) {
+                    // This operation type doesn't match, continue to next
+                    continue;
+                  }
+                }
+
+                if (!operationResult) {
+                  // Try to get operation type from switch
+                  const trSwitch = tr.switch();
+                  operationType = (trSwitch as any).name || String(trSwitch);
+                  return;
+                }
+
+                // Get the result code from the operation result
+                let resultCode;
+                if (typeof operationResult.switch === 'function') {
+                  const resultSwitch = operationResult.switch();
+                  resultCode = (resultSwitch as any).name || String(resultSwitch);
+                } else if (operationResult._switch?.name) {
+                  resultCode = operationResult._switch.name;
+                } else if (operationResult._arm) {
+                  resultCode = operationResult._arm;
+                }
+
+                // Check if it's a success code (ends with "Success")
+                if (resultCode && !resultCode.endsWith('Success')) {
+                  const errorInfo = {
+                    operation: index,
+                    error: resultCode,
+                    operationType,
+                    description: getOperationErrorDescription(resultCode)
+                  };
+                  analysis.operationErrors.push(errorInfo);
+                  analysis.layers.push({
+                    level: `Operation ${index}`,
+                    code: resultCode,
+                    meaning: getOperationErrorDescription(resultCode),
+                    operationType,
+                    envelopeType: 'operation',
+                    explanation: `The ${operationType} operation failed with a specific error code.`
+                  });
+                } else {
+                }
               } catch (e) {
-                // This operation type doesn't match, continue to next
-                continue;
               }
             }
-
-            if (!operationResult) {
-              // Try to get operation type from switch
-              const trSwitch = tr.switch();
-              operationType = (trSwitch as any).name || String(trSwitch);
-              return;
-            }
-
-            // Get the result code from the operation result
-            let resultCode;
-            if (typeof operationResult.switch === 'function') {
-              const resultSwitch = operationResult.switch();
-              resultCode = (resultSwitch as any).name || String(resultSwitch);
-            } else if (operationResult._switch?.name) {
-              resultCode = operationResult._switch.name;
-            } else if (operationResult._arm) {
-              resultCode = operationResult._arm;
-            }
-
-            // Check if it's a success code (ends with "Success")
-            if (resultCode && !resultCode.endsWith('Success')) {
-              const errorInfo = {
-                operation: index,
-                error: resultCode,
-                operationType,
-                description: getOperationErrorDescription(resultCode)
-              };
-              analysis.operationErrors.push(errorInfo);
-              analysis.layers.push({
-                level: `Operation ${index}`,
-                code: resultCode,
-                meaning: getOperationErrorDescription(resultCode),
-                operationType,
-                envelopeType: 'operation',
-                explanation: `The ${operationType} operation failed with a specific error code.`
-              });
-            } else {
-            }
-          } catch (e) {
-          }
-        }
           } catch (opError) {
           }
         });
@@ -2247,7 +3576,7 @@ const getOperationErrorDescription = (errorCode: string): string => {
   return descriptions[errorCode] || `Operation failed: ${errorCode}`;
 };
 
-export const createOperationNodes = (transaction: TransactionDetails): Node[] => {
+export const createOperationNodes = async (transaction: TransactionDetails): Promise<Node[]> => {
 
   // Filter out core_metrics operations - these are internal Horizon operations, not real transaction operations
   const validOperations = transaction.operations.filter(op =>
@@ -2257,16 +3586,89 @@ export const createOperationNodes = (transaction: TransactionDetails): Node[] =>
   const allNodes: Node[] = [];
   let globalNodeIndex = 0;
 
-  validOperations.forEach((op, index) => {
+  // Node layout constants - nodes range from 380px (minWidth) to 900px (maxWidth)
+  // Using 550px spacing for compact layout while preventing overlap
+  const NODE_HORIZONTAL_SPACING = 550;
+  const NODE_BASE_Y = 50;
+
+  for (let index = 0; index < validOperations.length; index++) {
+    const op = validOperations[index];
     const sorobanOp = transaction.sorobanOperations?.find((sop, idx) => idx === index);
 
     if (!sorobanOp && transaction.sorobanOperations && transaction.sorobanOperations.length > 0) {
     }
 
+    // Calculate position - all nodes on same horizontal line to prevent overlap
+    const xPosition = globalNodeIndex * NODE_HORIZONTAL_SPACING;
+    const yPosition = NODE_BASE_Y;
+
+    // Get effects for this operation
+    // For path payments, ALWAYS fetch from operation endpoint to ensure we get all trade effects
+    let operationEffects: any[] = [];
+    const isPathPayment = op.type === 'path_payment_strict_send' || op.type === 'path_payment_strict_receive';
+
+    if (isPathPayment && op._links?.effects?.href) {
+      // Always fetch effects directly for path payments
+      try {
+        let effectsUrl = op._links.effects.href;
+        // Ensure we get effects in ascending (chronological) order
+        if (!effectsUrl.includes('order=')) {
+          effectsUrl += (effectsUrl.includes('?') ? '&' : '?') + 'order=asc';
+        }
+        const effectsResponse = await fetch(effectsUrl);
+        const effectsData = await effectsResponse.json();
+        operationEffects = effectsData._embedded?.records || effectsData.records || [];
+      } catch (err) {
+        operationEffects = [];
+      }
+    } else {
+      // For other operations, try matching from transaction effects first
+      operationEffects = transaction.effects?.filter(eff => {
+        const effAny = eff as any;
+        // Try multiple matching strategies:
+        // 1. Direct operation_id match
+        if (effAny.operation && String(effAny.operation) === String(op.id)) return true;
+        // 2. Extract operation ID from _links.operation.href
+        if (effAny._links?.operation?.href) {
+          const opIdMatch = effAny._links.operation.href.match(/operations\/(\d+)/);
+          if (opIdMatch && opIdMatch[1] === String(op.id)) return true;
+        }
+        // 3. Paging token match (fallback)
+        if (effAny.paging_token?.startsWith(op.paging_token)) return true;
+        // 4. For classic operations, try matching by paging token prefix (first 2 segments match)
+        if (op.paging_token && effAny.paging_token) {
+          const opTokenParts = op.paging_token.split('-');
+          const effTokenParts = effAny.paging_token.split('-');
+          if (opTokenParts.length >= 2 && effTokenParts.length >= 2 &&
+            opTokenParts[0] === effTokenParts[0] && opTokenParts[1] === effTokenParts[1]) {
+            return true;
+          }
+        }
+        return false;
+      }) || [];
+
+      // If no effects found at transaction level, fetch per-operation (fallback for classic ops)
+      if (operationEffects.length === 0 && op._links?.effects?.href) {
+        try {
+          let effectsUrl = op._links.effects.href;
+          // Ensure we get effects in ascending (chronological) order
+          if (!effectsUrl.includes('order=')) {
+            effectsUrl += (effectsUrl.includes('?') ? '&' : '?') + 'order=asc';
+          }
+          const effectsResponse = await fetch(effectsUrl);
+          const effectsData = await effectsResponse.json();
+          operationEffects = effectsData._embedded?.records || effectsData.records || [];
+        } catch (err) {
+          operationEffects = [];
+        }
+      }
+    }
+
+
     const operationNode: Node = {
       id: `op-${index}`,
       type: 'operation',
-      position: { x: globalNodeIndex * 450, y: 50 },
+      position: { x: xPosition, y: yPosition },
       data: {
         type: op.type,
         operation: op,
@@ -2287,7 +3689,8 @@ export const createOperationNodes = (transaction: TransactionDetails): Node[] =>
         wasmHash: (sorobanOp as any)?.wasmHash,
         contractExecutable: (sorobanOp as any)?.contractExecutable,
         hostFunctionType: (sorobanOp as any)?.hostFunctionType,
-        ...extractOperationSpecificData(op)
+        operationEffects: operationEffects || [],
+        ...extractOperationSpecificData(op, operationEffects, transaction, index)
       }
     };
 
@@ -2321,7 +3724,7 @@ export const createOperationNodes = (transaction: TransactionDetails): Node[] =>
           const eventNode: Node = {
             id: `event-${index}-${eventIdx}`,
             type: 'event',
-            position: { x: globalNodeIndex * 450, y: 50 },
+            position: { x: globalNodeIndex * 80, y: 50 },
             data: {
               event: {
                 ...event,
@@ -2357,7 +3760,7 @@ export const createOperationNodes = (transaction: TransactionDetails): Node[] =>
         const stateChangeNode: Node = {
           id: `state-${index}-${changeIdx}`,
           type: 'stateChange',
-          position: { x: globalNodeIndex * 450, y: 50 + 200 },
+          position: { x: globalNodeIndex * NODE_HORIZONTAL_SPACING, y: NODE_BASE_Y },
           data: {
             stateChange,
             parentOperationIndex: index,
@@ -2382,7 +3785,7 @@ export const createOperationNodes = (transaction: TransactionDetails): Node[] =>
         const effectNode: Node = {
           id: `effect-${index}-${effectIdx}`,
           type: 'effect',
-          position: { x: globalNodeIndex * 450, y: 50 },
+          position: { x: globalNodeIndex * NODE_HORIZONTAL_SPACING, y: NODE_BASE_Y },
           data: {
             effect,
             parentOperationIndex: index,
@@ -2395,20 +3798,20 @@ export const createOperationNodes = (transaction: TransactionDetails): Node[] =>
       });
     }
     */ // End of disabled event/state/effect node creation
-  });
+  }
   return allNodes;
 };
 
-const extractOperationSpecificData = (op: any) => {
+const extractOperationSpecificData = (op: any, effects?: any[], transaction?: any, operationIndex?: number) => {
   const data: any = {};
-  
+
   switch (op.type) {
     case 'create_account':
       data.destination = op.account || op.destination;
       data.startingBalance = op.starting_balance;
       data.funder = extractAccountAddress(op.funder || op.source_account);
       break;
-      
+
     case 'payment':
       data.from = op.from;
       data.to = op.to;
@@ -2416,35 +3819,131 @@ const extractOperationSpecificData = (op: any) => {
       data.asset = op.asset_type === 'native' ? 'XLM' : op.asset_code;
       data.assetIssuer = op.asset_issuer;
       break;
-      
+
     case 'manage_sell_offer':
     case 'manage_offer':
       data.amount = op.amount;
-      data.price = op.price;
-      data.offerId = op.offer_id;
+      // Calculate price from price_r if available, otherwise use price field
+      if (op.price_r && typeof op.price_r === 'object' && op.price_r.n && op.price_r.d) {
+        data.price = String(parseFloat(op.price_r.n) / parseFloat(op.price_r.d));
+      } else {
+        data.price = op.price;
+      }
       data.selling_asset_type = op.selling_asset_type;
       data.selling_asset_code = op.selling_asset_code;
       data.selling_asset_issuer = op.selling_asset_issuer;
       data.buying_asset_type = op.buying_asset_type;
       data.buying_asset_code = op.buying_asset_code;
       data.buying_asset_issuer = op.buying_asset_issuer;
+
+      // Extract sponsor if present
+      if (op.sponsor) {
+        data.sponsor = op.sponsor;
+      }
+
+      // PRESERVE the original operation's offer_id from XDR (before effects modify it)
+      // If original_offer_id exists (extracted from XDR), use it; otherwise fall back to op.offer_id
+      data.original_offer_id = (op as any).original_offer_id !== undefined
+        ? String((op as any).original_offer_id)
+        : (op.offer_id ? String(op.offer_id) : '0');
+
+      // Initial offer_id from operation (will be 0 for new offers)
+      data.offer_id = op.offer_id ? String(op.offer_id) : '0';
+      data.offerId = data.offer_id;
+
+      // Try to find actual offer_id from effects (for DISPLAY, not detection)
+      if (effects && effects.length > 0) {
+        const offerEffect = effects.find((eff: any) =>
+          (eff.type === 'trade' || eff.type === 'manage_offer' || eff.type === 'offer_created' ||
+            eff.type === 'offer_updated' || eff.type === 'offer_removed' || eff.type_i === 3) &&
+          (eff.offer_id || eff.seller_offer_id || eff.buying_offer_id || eff.selling_offer_id)
+        );
+        if (offerEffect) {
+          const foundId = offerEffect.offer_id || offerEffect.seller_offer_id ||
+            offerEffect.buying_offer_id || offerEffect.selling_offer_id;
+          if (foundId && String(foundId) !== '0') {
+            // Update the display IDs but keep original_offer_id unchanged
+            data.offerId = String(foundId);
+            data.offer_id = String(foundId);
+          }
+        }
+      }
+
+      // If effects didn't provide the offer ID, parse XDR metadata
+      if ((data.offer_id === '0' || !data.offer_id) && transaction?.debugInfo?.metaXdr && operationIndex !== undefined) {
+        const xdrOfferId = extractOfferIdFromXdr(transaction.debugInfo.metaXdr, operationIndex);
+        if (xdrOfferId) {
+          data.offerId = xdrOfferId;
+          data.offer_id = xdrOfferId;
+        }
+      }
       break;
-      
+
     case 'manage_buy_offer':
       data.buyAmount = op.buy_amount || op.amount;
-      data.price = op.price;
-      data.offerId = op.offer_id;
+      // Calculate price from price_r if available, otherwise use price field
+      if (op.price_r && typeof op.price_r === 'object' && op.price_r.n && op.price_r.d) {
+        data.price = String(parseFloat(op.price_r.n) / parseFloat(op.price_r.d));
+      } else {
+        data.price = op.price;
+      }
       data.selling_asset_type = op.selling_asset_type;
       data.selling_asset_code = op.selling_asset_code;
       data.selling_asset_issuer = op.selling_asset_issuer;
       data.buying_asset_type = op.buying_asset_type;
       data.buying_asset_code = op.buying_asset_code;
       data.buying_asset_issuer = op.buying_asset_issuer;
+
+      // Extract sponsor if present
+      if (op.sponsor) {
+        data.sponsor = op.sponsor;
+      }
+
+      // PRESERVE the original operation's offer_id from XDR (before effects modify it)
+      // If original_offer_id exists (extracted from XDR), use it; otherwise fall back to op.offer_id
+      data.original_offer_id = (op as any).original_offer_id !== undefined
+        ? String((op as any).original_offer_id)
+        : (op.offer_id ? String(op.offer_id) : '0');
+
+      // Initial offer_id from operation (will be 0 for new offers)
+      data.offer_id = op.offer_id ? String(op.offer_id) : '0';
+      data.offerId = data.offer_id;
+
+      // Try to find actual offer_id from effects (for DISPLAY, not detection)
+      if (effects && effects.length > 0) {
+        const offerEffect = effects.find((eff: any) =>
+          (eff.type === 'trade' || eff.type === 'manage_offer' || eff.type === 'offer_created' ||
+            eff.type === 'offer_updated' || eff.type === 'offer_removed' || eff.type_i === 3) &&
+          (eff.offer_id || eff.seller_offer_id || eff.buying_offer_id || eff.selling_offer_id)
+        );
+        if (offerEffect) {
+          const foundId = offerEffect.offer_id || offerEffect.seller_offer_id ||
+            offerEffect.buying_offer_id || offerEffect.selling_offer_id;
+          if (foundId && String(foundId) !== '0') {
+            data.offerId = String(foundId);
+            data.offer_id = String(foundId);
+          }
+        }
+      }
+
+      // If effects didn't provide the offer ID, parse XDR metadata
+      if ((data.offer_id === '0' || !data.offer_id) && transaction?.debugInfo?.metaXdr && operationIndex !== undefined) {
+        const xdrOfferId = extractOfferIdFromXdr(transaction.debugInfo.metaXdr, operationIndex);
+        if (xdrOfferId) {
+          data.offerId = xdrOfferId;
+          data.offer_id = xdrOfferId;
+        }
+      }
       break;
-      
+
     case 'create_passive_sell_offer':
       data.amount = op.amount;
-      data.price = op.price;
+      // Calculate price from price_r if available, otherwise use price field
+      if (op.price_r && typeof op.price_r === 'object' && op.price_r.n && op.price_r.d) {
+        data.price = String(parseFloat(op.price_r.n) / parseFloat(op.price_r.d));
+      } else {
+        data.price = op.price;
+      }
       data.selling_asset_type = op.selling_asset_type;
       data.selling_asset_code = op.selling_asset_code;
       data.selling_asset_issuer = op.selling_asset_issuer;
@@ -2452,7 +3951,7 @@ const extractOperationSpecificData = (op: any) => {
       data.buying_asset_code = op.buying_asset_code;
       data.buying_asset_issuer = op.buying_asset_issuer;
       break;
-      
+
     case 'path_payment_strict_send':
       data.from = extractAccountAddress(op.from || op.source_account);
       data.to = op.to || op.destination;
@@ -2488,16 +3987,16 @@ const extractOperationSpecificData = (op: any) => {
       data.created_at = op.created_at;
       data.id = op.id;
       break;
-      
+
     case 'begin_sponsoring_future_reserves':
       data.sponsor = extractAccountAddress(op.source_account);
       data.sponsoredId = op.sponsored_id;
       break;
-      
+
     case 'end_sponsoring_future_reserves':
       data.action = 'end_sponsorship';
       break;
-      
+
     case 'set_trust_line_flags':
       data.trustor = op.trustor;
       data.assetCode = op.asset_code;
@@ -2505,7 +4004,7 @@ const extractOperationSpecificData = (op: any) => {
       data.setFlagNames = op.set_flags_s || [];
       data.clearFlagNames = op.clear_flags_s || [];
       break;
-      
+
     default:
       // Copy common fields
       Object.keys(op).forEach(key => {
@@ -2514,7 +4013,7 @@ const extractOperationSpecificData = (op: any) => {
         }
       });
   }
-  
+
   return data;
 };
 
@@ -2525,13 +4024,13 @@ export const createOperationEdges = (transaction: TransactionDetails): Edge[] =>
     op.type !== 'core_metrics' && op.type !== 'coreMetrics' && op.type !== 'core-metrics'
   );
 
-  // Create sequential edges between operations
+  // Create sequential edges between operations - using straight edges for horizontal alignment
   for (let i = 0; i < validOperations.length - 1; i++) {
     edges.push({
       id: `edge-seq-${i}`,
       source: `op-${i}`,
       target: `op-${i + 1}`,
-      type: 'smoothstep',
+      type: 'straight',
       animated: true,
       style: {
         stroke: '#2563eb',
@@ -2556,7 +4055,7 @@ export const createOperationEdges = (transaction: TransactionDetails): Edge[] =>
           id: `edge-op${index}-state${changeIdx}`,
           source: `op-${index}`,
           target: `state-${index}-${changeIdx}`,
-          type: 'smoothstep',
+          type: 'straight',
           animated: false,
           style: {
             stroke: '#10b981',
@@ -2634,7 +4133,7 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
             // Use official Stellar RPC to simulate (free public endpoint)
             const rpcUrl = networkConfig.isTestnet
               ? 'https://soroban-testnet.stellar.org'
-              : 'https://mainnet.sorobanrpc.com';
+              : 'https://soroban-rpc.mainnet.stellar.gateway.fm';
 
             const rpcServer = new StellarSdk.rpc.Server(rpcUrl, { allowHttp: false });
             const simResult = await rpcServer.simulateTransaction(transaction);
@@ -2902,7 +4401,7 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                       if (contractIdHash) {
                         contractId = StellarSdk.StrKey.encodeContract(contractIdHash);
                       }
-                    } catch {}
+                    } catch { }
 
                     // Extract event body
                     const body = eventData.body();
@@ -2920,14 +4419,14 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                         topics.forEach((topic: any, topicIdx: number) => {
                           try {
                             const topicStr = decodeScVal(topic);
-                            logs.push(`   Topic ${topicIdx}: ${JSON.stringify(topicStr)}`);
-                          } catch {}
+                            logs.push(`   Topic ${topicIdx}: ${safeStringify(topicStr)}`);
+                          } catch { }
                         });
 
                         try {
                           const dataStr = decodeScVal(data);
-                          logs.push(`   Data: ${JSON.stringify(dataStr)}`);
-                        } catch {}
+                          logs.push(`   Data: ${safeStringify(dataStr)}`);
+                        } catch { }
                       } catch (bodyError: any) {
                       }
                     }
@@ -3079,8 +4578,6 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                         if (resourceExtV1Type === '1' && resourceExtV1.v1) {
                           const actualMetrics = resourceExtV1.v1();
 
-                          // Debug: Log all available fields
-
                           // Extract all available metrics (override if better data available)
                           if (actualMetrics.cpuInstructions) {
                             const cpu = Number(actualMetrics.cpuInstructions());
@@ -3131,7 +4628,7 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                   }
                   if (v1Ext.totalRefundableResourceFeeCharged) {
                   }
-                } catch {}
+                } catch { }
               }
             } catch (extError: any) {
             }
@@ -3292,9 +4789,9 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
 
         logs.push(`Transaction meta type: ${metaType}`);
 
-        // For Soroban transactions (v3 meta)
-        if (metaType === 'transactionMetaV3') {
-          const v3 = meta.v3();
+        // For Soroban transactions (v3 or v4 meta)
+        if (metaType === 'transactionMetaV3' || metaType === 'transactionMetaV4' || metaType === '3' || metaType === '4') {
+          const v3 = (metaType === 'transactionMetaV4' || metaType === '4') ? meta.v4() : meta.v3();
 
           if (v3.sorobanMeta && v3.sorobanMeta()) {
             const sorobanMeta = v3.sorobanMeta();
@@ -3372,7 +4869,7 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
 
             // Extract real diagnostic events as logs
             try {
-              const events = sorobanMeta.events();
+              const events = (sorobanMeta as any).events();
               if (events && events.length > 0) {
                 logs.push(`📡 Diagnostic events: ${events.length} events emitted`);
                 logs.push('');
@@ -3475,8 +4972,8 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                     try {
                       const changeSwitch = change.switch();
                       const changeType = (changeSwitch as any).name || String(changeSwitch);
-                      if (changeType === 'ledgerEntryState') {
-                        const entry = change.state();
+                      if (changeType === 'ledgerEntryRestored') {
+                        const entry = change.restored();
                         realResourceUsage.readBytes += entry.toXDR('base64').length;
                       } else if (changeType === 'ledgerEntryCreated' || changeType === 'ledgerEntryUpdated') {
                         const entry = changeType === 'ledgerEntryCreated' ? change.created() : change.updated();
@@ -3573,8 +5070,8 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
           const metaSwitch = meta.switch();
           const metaType = (metaSwitch as any).name || String(metaSwitch);
 
-          if (metaType === 'transactionMetaV3') {
-            const v3 = meta.v3();
+          if (metaType === 'transactionMetaV3' || metaType === 'transactionMetaV4' || metaType === '3' || metaType === '4') {
+            const v3 = (metaType === 'transactionMetaV4' || metaType === '4') ? meta.v4() : meta.v3();
             if (v3.sorobanMeta && v3.sorobanMeta()) {
               const sorobanMeta = v3.sorobanMeta();
 
@@ -3599,7 +5096,7 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
 
               // Check diagnostic events for error logs
               try {
-                const events = sorobanMeta.events();
+                const events = (sorobanMeta as any).events();
                 if (events && events.length > 0) {
                   logs.push(`\n📋 Error Context from ${events.length} diagnostic events:`);
                   events.forEach((event: any, idx: number) => {
@@ -3909,7 +5406,7 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
     };
 
   } catch (error: any) {
-    
+
     const simulation: SimulationResult = {
       success: false,
       estimatedFee: '0',
@@ -3956,3 +5453,5 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
     };
   }
 };
+
+export { simpleContractMetadataService };

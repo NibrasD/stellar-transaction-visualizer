@@ -3,7 +3,7 @@ import { Zap, Database, Clock } from 'lucide-react';
 import type { NodeProps } from 'reactflow';
 import * as StellarSdk from '@stellar/stellar-sdk';
 import { Handle, Position } from 'reactflow';
-import { decodeScVal } from '../services/stellar';
+import { decodeScVal, formatContractValue } from '../services/stellar';
 
 interface EventNodeData {
   event: any;
@@ -121,7 +121,8 @@ export function EventNode({ data }: NodeProps<EventNodeData>) {
       }
 
       if (typeof val === 'number') {
-        return val.toLocaleString(undefined, { maximumFractionDigits: 7 });
+        // Return raw number without formatting for Soroban types
+        return val.toString();
       }
 
       if (typeof val === 'string') {
@@ -209,7 +210,20 @@ export function EventNode({ data }: NodeProps<EventNodeData>) {
           }
         }
       }
+
+      // Keep FULL base64 for decoding
       const b64 = btoa(String.fromCharCode(...Array.from(bytes)));
+      const fullBytesStr = `${b64}bytes`;
+
+      // Try to decode using the FULL base64 string
+      const formatted = formatContractValue(fullBytesStr);
+
+      // If successfully decoded to text, return it
+      if (formatted !== fullBytesStr && !formatted.startsWith('0x')) {
+        return formatted;
+      }
+
+      // If not decoded (still in base64), truncate for display
       const displayB64 = b64.length > 24 ? `${b64.substring(0, 12)}…${b64.substring(b64.length - 6)}` : b64;
       return `${displayB64}bytes`;
     }
@@ -222,11 +236,15 @@ export function EventNode({ data }: NodeProps<EventNodeData>) {
     }
 
     if (typeof val === 'number') {
-      return `${val}u32`;
+      // Determine appropriate type based on value size
+      const type = val <= 4294967295 ? 'u32' : 'u64';
+      const formatted = `${val}${type}`;
+      return formatContractValue(formatted);
     }
 
     if (typeof val === 'bigint') {
-      return `${val}i128`;
+      const formatted = `${val}i128`;
+      return formatContractValue(formatted);
     }
 
     if (typeof val === 'boolean') {
@@ -281,7 +299,7 @@ export function EventNode({ data }: NodeProps<EventNodeData>) {
   const jsonStructure = buildJsonStructure();
 
   return (
-    <div className="px-4 py-3 bg-gradient-to-br from-slate-900 to-slate-800 rounded-lg shadow-lg border-2 border-cyan-500/30 w-auto relative" style={{ minWidth: '450px', maxWidth: '650px' }}>
+    <div className="px-4 py-3 bg-gradient-to-br from-slate-900 to-slate-800 rounded-lg shadow-lg border-2 border-cyan-500/30 w-auto relative" style={{ minWidth: '280px', maxWidth: '380px' }}>
       <Handle type="target" position={Position.Left} className="!bg-cyan-400" />
 
       {/* Header */}
