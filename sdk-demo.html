@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stellar Transaction Visualizer SDK Demo</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 1200px;
+      margin: 40px auto;
+      padding: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+    }
+    .container {
+      background: white;
+      border-radius: 12px;
+      padding: 30px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    h1 {
+      color: #667eea;
+      margin-bottom: 10px;
+    }
+    .subtitle {
+      color: #666;
+      margin-bottom: 30px;
+    }
+    .section {
+      margin: 30px 0;
+      padding: 20px;
+      background: #f8f9fa;
+      border-radius: 8px;
+      border-left: 4px solid #667eea;
+    }
+    .code {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      padding: 15px;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    .success {
+      color: #10b981;
+      font-weight: bold;
+    }
+    .info {
+      color: #3b82f6;
+    }
+    button {
+      background: #667eea;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 10px 5px 10px 0;
+      transition: background 0.3s;
+    }
+    button:hover {
+      background: #5568d3;
+    }
+    #output {
+      margin-top: 20px;
+      padding: 15px;
+      background: white;
+      border: 2px solid #e5e7eb;
+      border-radius: 6px;
+      min-height: 100px;
+    }
+    .location {
+      background: #fef3c7;
+      border-left: 4px solid #f59e0b;
+      padding: 15px;
+      margin: 20px 0;
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🚀 Stellar Transaction Visualizer SDK</h1>
+    <p class="subtitle">SDK Demo & Location Guide</p>
+
+    <div class="location">
+      <h3>📍 SDK Location</h3>
+      <p><strong>The SDK files are in:</strong></p>
+      <div class="code">
+/tmp/cc-agent/57862390/project/dist/
+├── sdk/index.js        ← Main SDK entry point
+├── services/stellar.js ← Core functions
+└── types/stellar.js    ← Type definitions
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>✅ SDK Status</h3>
+      <p id="status">Loading SDK...</p>
+    </div>
+
+    <div class="section">
+      <h3>🧪 Test the SDK</h3>
+      <button onclick="testSDK()">Test SDK Functions</button>
+      <button onclick="showExample()">Show Code Example</button>
+      <div id="output"></div>
+    </div>
+
+    <div class="section">
+      <h3>📦 How to Use</h3>
+      <p><strong>Option 1: Import in JavaScript/TypeScript</strong></p>
+      <div class="code">
+import { StellarTransactionVisualizer } from './dist/sdk/index.js';
+
+const sdk = new StellarTransactionVisualizer({
+  isTestnet: true
+});
+
+const tx = await sdk.getTransactionDetails('TX_HASH');
+console.log(tx);
+      </div>
+
+      <p style="margin-top: 20px;"><strong>Option 2: Import Functions Directly</strong></p>
+      <div class="code">
+import {
+  fetchTransaction,
+  fetchContractTransactions,
+  setNetwork
+} from './dist/services/stellar.js';
+
+setNetwork({ isTestnet: true });
+const tx = await fetchTransaction('TX_HASH');
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>📚 Documentation</h3>
+      <ul>
+        <li><a href="./README.md">README.md</a> - Quick start guide</li>
+        <li><a href="./SDK_DOCUMENTATION.md">SDK_DOCUMENTATION.md</a> - Full API reference</li>
+        <li><a href="./HOW_TO_USE_SDK.md">HOW_TO_USE_SDK.md</a> - Step-by-step guide</li>
+        <li><a href="./CHANGELOG.md">CHANGELOG.md</a> - Version history</li>
+      </ul>
+    </div>
+  </div>
+
+  <script type="module">
+    import { StellarTransactionVisualizer } from './dist/sdk/index.js';
+
+    // Test SDK loading
+    window.addEventListener('DOMContentLoaded', () => {
+      const status = document.getElementById('status');
+      try {
+        const sdk = new StellarTransactionVisualizer({ isTestnet: true });
+        status.innerHTML = '<span class="success">✓ SDK Loaded Successfully!</span>';
+        status.innerHTML += '<br><span class="info">Available methods: getTransactionDetails, simulateTransaction, getSorobanOperations, getContractEvents</span>';
+
+        window.testSDK = async () => {
+          const output = document.getElementById('output');
+          output.innerHTML = '<p>Testing SDK...</p>';
+
+          try {
+            // Show SDK info
+            const info = `
+              <h4>SDK Information:</h4>
+              <ul>
+                <li>Class: StellarTransactionVisualizer</li>
+                <li>Methods: ${Object.getOwnPropertyNames(Object.getPrototypeOf(sdk)).filter(m => m !== 'constructor').join(', ')}</li>
+                <li>Status: <span class="success">Ready</span></li>
+              </ul>
+              <h4>To use the SDK:</h4>
+              <ol>
+                <li>Import from <code>./dist/sdk/index.js</code></li>
+                <li>Initialize with network config</li>
+                <li>Call methods like <code>getTransactionDetails(hash)</code></li>
+              </ol>
+            `;
+            output.innerHTML = info;
+          } catch (error) {
+            output.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+          }
+        };
+
+        window.showExample = () => {
+          const output = document.getElementById('output');
+          output.innerHTML = `
+            <h4>Complete Example:</h4>
+            <pre style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 6px; overflow-x: auto;">
+// 1. Import the SDK
+import { StellarTransactionVisualizer } from './dist/sdk/index.js';
+
+// 2. Initialize
+const sdk = new StellarTransactionVisualizer({
+  isTestnet: true,
+  networkUrl: 'https://horizon-testnet.stellar.org',
+  networkPassphrase: 'Test SDF Network ; September 2015'
+});
+
+// 3. Fetch a transaction
+const txHash = 'YOUR_TRANSACTION_HASH';
+const transaction = await sdk.getTransactionDetails(txHash);
+
+// 4. Get contract operations
+const contractOps = sdk.getSorobanOperations(transaction);
+console.log('Contract operations:', contractOps);
+
+// 5. Get events
+const events = sdk.getContractEvents(transaction);
+console.log('Events:', events);
+
+// 6. Simulate transaction
+const simulation = await sdk.simulateTransaction(txHash);
+console.log('Simulation:', simulation);
+            </pre>
+          `;
+        };
+      } catch (error) {
+        status.innerHTML = `<span style="color: red;">✗ Error loading SDK: ${error.message}</span>`;
+        status.innerHTML += '<br><br>Run <code>npm run build:sdk</code> to build the SDK first.';
+      }
+    });
+  </script>
+</body>
+</html>
