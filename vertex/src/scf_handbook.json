@@ -1,0 +1,33 @@
+{
+  "general": {
+    "title": "Stellar Community Fund (SCF) Handbook",
+    "description": "The official guide for the Stellar Community Fund (SCF), which provides funding and support to projects building on Stellar and Soroban."
+  },
+  "sections": [
+    {
+      "id": "how_it_works",
+      "title": "How it Works (Build Review Process)",
+      "content": "The SCF follow a structured timeline: 1. Interest Form submission. 2. Eligibility Review by SDF. 3. Invitation to Apply. 4. Panel Review (Ecosystem Value, Technical Feasibility, Roadmap Clarity, Team Capability). 5. Revision Window. 6. Community Vote (Open Track). 7. Selection & Funding based on panel scores and community support."
+    },
+    {
+      "id": "tracks",
+      "title": "Award Tracks & Programs",
+      "content": "Build Award Tracks include: Open Track (new startups/tools), Integration Track (integrating Stellar/Soroban), and RFP Track (Request for Proposals). Other programs include Instawards (fast, small contributions), Audit Bank (credits for security audits), Public Goods Award, Stellar Liquidity Award, and Growth Hack (scaling)."
+    },
+    {
+      "id": "guidelines",
+      "title": "Budget & Deliverable Guidelines",
+      "content": "Awards are capped at $150,000 worth of XLM per project. Project timelines should not exceed 6 months. Funding is released in three tranches upon completion of specific milestones."
+    },
+    {
+      "id": "community_rules",
+      "title": "Community Guidelines",
+      "content": "Be supportive, give constructive feedback, and share expertise. Don't wait to provide feedback—earlier is better. Don't assume a project is 'wrong' just because you disagree; ask clarifying questions."
+    },
+    {
+      "id": "eligibility",
+      "title": "Eligibility Requirements",
+      "content": "Projects must bring value to the Stellar/Soroban ecosystem, be technically sound, and have a clear, realistic roadmap."
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "rewrites": [
+    {
+      "source": "/vertex/data/:path*",
+      "destination": "/vertex/data/:path*"
+    },
+    {
+      "source": "/vertex/:path*",
+      "destination": "/vertex/index.html"
+    },
+    {
+      "source": "/api/gemini/:path*",
+      "destination": "https://generativelanguage.googleapis.com/:path*"
+    },
+    {
+      "source": "/((?!vertex|api).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

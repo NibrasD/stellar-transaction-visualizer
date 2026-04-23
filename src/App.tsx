@@ -115,6 +115,20 @@ function AppLayout() {
             } />
           </Routes>
         </div>
+        
+        <footer className="mt-12 py-8 border-t border-gray-200 text-center flex flex-col items-center gap-2">
+          <p className="text-sm text-gray-600">
+            Support us on X: <a href="https://x.com/Stellar_Viz" target="_blank" rel="noreferrer" className="text-blue-600 font-bold hover:underline">@Stellar_Viz</a>
+          </p>
+          <a
+            href="https://github.com/NibrasD/stellar-transaction-visualizer"
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1.5 text-blue-600 font-bold hover:underline text-sm"
+          >
+            GitHub Repository
+          </a>
+        </footer>
       </div>
     </div>
   );

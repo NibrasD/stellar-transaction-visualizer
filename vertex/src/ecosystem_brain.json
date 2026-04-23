@@ -1,0 +1,145 @@
+{
+  "verticals": {
+    "CREATOR_ECONOMY": {
+      "name": "Creator Economy & Social Media",
+      "keywords": [
+        "content",
+        "media",
+        "social",
+        "tipping",
+        "creator",
+        "influencer",
+        "publishing",
+        "blog",
+        "news",
+        "music",
+        "video",
+        "محتوى",
+        "صناعة",
+        "مبدعين"
+      ],
+      "anchors": [
+        "Tipper",
+        "Content DAO",
+        "QuillTip",
+        "Social & Podcast",
+        "Haciendo Stellar",
+        "Stellar Tip",
+        "Lumen Loop",
+        "The Blue Marble"
+      ],
+      "strategy": "Focus on micro-payments, decentralized identity (Passkeys), and direct fan involvement."
+    },
+    "RWA_TOKENIZATION": {
+      "name": "Real World Assets (RWA)",
+      "keywords": [
+        "asset",
+        "real world",
+        "tokenization",
+        "property",
+        "gold",
+        "commodity",
+        "yield",
+        "investment",
+        "security",
+        "عقارات",
+        "أصول",
+        "ترميز"
+      ],
+      "anchors": [
+        "Rivool Finance: RWA in Emerging Markets",
+        "Neovestor",
+        "Alternun",
+        "Diamond Hand",
+        "Real World Assets on Stellar",
+        "Property Tokenization"
+      ],
+      "strategy": "Prioritize transparency, regulatory compliance, and cross-border liquidity."
+    },
+    "FINANCE_DEFI": {
+      "name": "DeFi & Advanced Trading",
+      "keywords": [
+        "defi",
+        "yield",
+        "dex",
+        "amm",
+        "liquidity",
+        "swap",
+        "trading",
+        "finance",
+        "تمويل",
+        "لامركزي",
+        "تداول"
+      ],
+      "anchors": [
+        "AXIS",
+        "SocketFi",
+        "Lendeasy",
+        "Soroswap",
+        "Allbridge",
+        "Soroban AMM",
+        "LumenSwap"
+      ],
+      "strategy": "Emphasize high-performance Soroban smart contracts and low-cost transactions."
+    },
+    "GLOBAL_PAYMENTS": {
+      "name": "Global Payments & Remittances",
+      "keywords": [
+        "payment",
+        "remittance",
+        "transfer",
+        "checkout",
+        "fiat",
+        "stablecoin",
+        "wallet",
+        "usdc",
+        "payout",
+        "دفع",
+        "حوالات",
+        "محفظة"
+      ],
+      "anchors": [
+        "PayZoll",
+        "Scalps",
+        "Digibank",
+        "TransferMole",
+        "Decaf",
+        "Beans",
+        "Stellar Disbursement Platform"
+      ],
+      "strategy": "Leverage Stellar's core strengths: speed, anchors, and USDC integration."
+    },
+    "INFRA_DEVTOOLS": {
+      "name": "Infrastructure & Developer Tooling",
+      "keywords": [
+        "sdk",
+        "api",
+        "infrastructure",
+        "tooling",
+        "developer",
+        "node",
+        "security",
+        "data",
+        "analytics",
+        "أدوات",
+        "برمجة",
+        "بنية"
+      ],
+      "anchors": [
+        "Token Terminal",
+        "ChainPatrol",
+        "Beamable",
+        "Soroban SDK",
+        "Blockdaemon",
+        "Stellar Architect"
+      ],
+      "strategy": "Build robust, scalable foundations for the next generation of Stellar apps."
+    },
+    "SCF_APPLY": {
+      "name": "Stellar Community Fund (SCF) Application",
+      "keywords": ["apply", "scf", "grant", "funding", "how to", "application", "rounds", "awards", "تقديم", "دعم", "تمويل", "جائزة"],
+      "anchors": ["SCF Handbook", "Vibrant", "Stellar Asset Sandbox"],
+      "strategy": "Start with a 'Standard Award' for MVP, then progress to 'Build Awards' for scaling. Focus on community impact and technical feasibility."
+    }
+  }
+}
