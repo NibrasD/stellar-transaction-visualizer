@@ -10,6 +10,23 @@ if (supabaseUrl && supabaseKey) {
   supabase = createClient(supabaseUrl, supabaseKey);
 }
 
+const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout = 15000): Promise<Response> => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error(`Request timeout - server took too long to respond to ${url}`);
+    }
+    throw error;
+  }
+};
+
 export interface FunctionSpec {
   name: string;
   inputs: Array<{ name: string; type: string }>;
@@ -153,7 +170,7 @@ class SimpleContractMetadataService {
         headers['Authorization'] = `Bearer ${supabaseAnonKey}`;
       }
 
-      const response = await fetch(edgeFunctionUrl, { headers });
+      const response = await fetchWithTimeout(edgeFunctionUrl, { headers });
 
       if (!response.ok) {
         return null;
@@ -280,7 +297,7 @@ class SimpleContractMetadataService {
 
       const edgeFunctionUrl = `${supabaseUrl}/functions/v1/fetch-contract-spec?contractId=${contractId}&network=${this.network}&method=rpc`;
 
-      const response = await fetch(edgeFunctionUrl, {
+      const response = await fetchWithTimeout(edgeFunctionUrl, {
         headers: {
           'Authorization': `Bearer ${supabaseKey}`,
           'Content-Type': 'application/json',
@@ -356,7 +373,7 @@ class SimpleContractMetadataService {
         headers['Authorization'] = `Bearer ${supabaseKey}`;
       }
 
-      const response = await fetch(edgeFunctionUrl, { headers });
+      const response = await fetchWithTimeout(edgeFunctionUrl, { headers });
 
       if (!response.ok) {
         return null;

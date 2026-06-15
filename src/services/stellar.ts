@@ -43,19 +43,18 @@ export const setNetwork = (config: NetworkConfig) => {
 // Initialize with testnet by default
 setNetwork(networkConfig);
 
-// Helper function to add timeout to fetch requests
-const fetchWithTimeout = async (url: string, timeout = 15000): Promise<Response> => {
+export const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout = 15000): Promise<Response> => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, { ...options, signal: controller.signal });
     clearTimeout(timeoutId);
     return response;
   } catch (error: any) {
     clearTimeout(timeoutId);
     if (error.name === 'AbortError') {
-      throw new Error('Request timeout - Horizon server took too long to respond');
+      throw new Error(`Request timeout - server took too long to respond to ${url}`);
     }
     throw error;
   }
@@ -713,7 +712,7 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
           : 'https://horizon-testnet.stellar.org';
 
         try {
-          const oppositeResponse = await fetchWithTimeout(`${oppositeUrl}/transactions/${hash}`, 5000);
+          const oppositeResponse = await fetchWithTimeout(`${oppositeUrl}/transactions/${hash}`, {}, 5000);
           if (oppositeResponse.ok) {
             throw new Error(`Transaction not found on ${currentNetwork}. This transaction exists on ${oppositeNetwork}. Please switch networks and try again.`);
           }
@@ -1219,7 +1218,7 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
 
         for (const rpcUrl of alternativeRpcUrls) {
           try {
-            const altResponse = await fetch(rpcUrl, {
+            const altResponse = await fetchWithTimeout(rpcUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -1806,7 +1805,7 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
         : 'https://horizon-testnet.stellar.org';
 
       try {
-        const oppositeResponse = await fetchWithTimeout(`${oppositeUrl}/transactions/${hash}`, 5000);
+        const oppositeResponse = await fetchWithTimeout(`${oppositeUrl}/transactions/${hash}`, {}, 5000);
         if (oppositeResponse.ok) {
           throw new Error(`Transaction not found on ${currentNetwork}. This transaction exists on ${oppositeNetwork}. Please switch networks and try again.`);
         }
@@ -1904,7 +1903,7 @@ const querySorobanRpc = async (hash: string) => {
     ? 'https://soroban-testnet.stellar.org'
     : 'https://soroban-rpc.mainnet.stellar.gateway.fm';
 
-  const response = await fetch(rpcUrl, {
+  const response = await fetchWithTimeout(rpcUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -3615,7 +3614,7 @@ export const createOperationNodes = async (transaction: TransactionDetails): Pro
         if (!effectsUrl.includes('order=')) {
           effectsUrl += (effectsUrl.includes('?') ? '&' : '?') + 'order=asc';
         }
-        const effectsResponse = await fetch(effectsUrl);
+        const effectsResponse = await fetchWithTimeout(effectsUrl);
         const effectsData = await effectsResponse.json();
         operationEffects = effectsData._embedded?.records || effectsData.records || [];
       } catch (err) {
@@ -3655,7 +3654,7 @@ export const createOperationNodes = async (transaction: TransactionDetails): Pro
           if (!effectsUrl.includes('order=')) {
             effectsUrl += (effectsUrl.includes('?') ? '&' : '?') + 'order=asc';
           }
-          const effectsResponse = await fetch(effectsUrl);
+          const effectsResponse = await fetchWithTimeout(effectsUrl);
           const effectsData = await effectsResponse.json();
           operationEffects = effectsData._embedded?.records || effectsData.records || [];
         } catch (err) {
