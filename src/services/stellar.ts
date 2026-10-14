@@ -7,7 +7,8 @@ import type {
   SorobanOperation,
   ContractEvent,
   SimulationResult,
-  StateChange
+  StateChange,
+  HistoricalArchiveData
 } from '../types/stellar.js';
 import { Node, Edge } from 'reactflow';
 import { simpleContractMetadataService } from './simpleContractMetadata.js';
@@ -910,15 +911,33 @@ export const fetchTransaction = async (
       }
     }
 
-    // For archive transactions, fetch directly from RPC
+    // For archive transactions, fetch directly from RPC or historical archive fallback
     let archiveRpcData: any = null;
     if (isArchiveTransaction) {
       try {
         archiveRpcData = await querySorobanRpc(hash, activeConfig);
       } catch (rpcError: any) {
-        // If RPC also fails, transaction doesn't exist
-        const currentNetwork = activeConfig.isTestnet ? 'Testnet' : 'Mainnet';
-        throw new Error(`Transaction not found on ${currentNetwork}. Please verify the transaction hash and network selection.`);
+        // Query RPC failed, try historical archive fallback below
+      }
+
+      // If Soroban RPC returned null or NOT_FOUND without full XDR (e.g. beyond 7-day retention), use historical fallback
+      if (!archiveRpcData || (archiveRpcData.status === 'NOT_FOUND' && !archiveRpcData.envelopeXdr && !archiveRpcData.resultMetaXdr)) {
+        try {
+          const historical = await fetchHistoricalTransactionFallback(hash, activeConfig);
+          if (historical && (historical.envelopeXdr || historical.resultMetaXdr || historical.resultXdr)) {
+            archiveRpcData = {
+              status: historical.successful !== false ? 'SUCCESS' : 'FAILED',
+              envelopeXdr: historical.envelopeXdr,
+              resultMetaXdr: historical.resultMetaXdr,
+              resultXdr: historical.resultXdr,
+              ledger: historical.ledger,
+              createdAt: historical.createdAt,
+              events: []
+            };
+          }
+        } catch (histErr) {
+          // Fallback failed, continue to validation
+        }
       }
 
       if (!archiveRpcData) {
@@ -1238,6 +1257,37 @@ export const fetchTransaction = async (
             }
           } catch (altError) {
           }
+        }
+      }
+
+      // Multi-tier archival fallback for transactions beyond the 7-day Soroban RPC retention limit
+      if (!sorobanData || !sorobanData.resultMetaXdr || sorobanData.status === 'NOT_FOUND') {
+        try {
+          const historical = await fetchHistoricalTransactionFallback(hash, activeConfig);
+          if (historical) {
+            if (!sorobanData) {
+              sorobanData = {
+                status: historical.successful !== false ? 'SUCCESS' : 'FAILED',
+                envelopeXdr: historical.envelopeXdr,
+                resultMetaXdr: historical.resultMetaXdr,
+                resultXdr: historical.resultXdr,
+                ledger: historical.ledger,
+                createdAt: historical.createdAt,
+                events: []
+              };
+            }
+            if (historical.resultMetaXdr) {
+              sorobanData.resultMetaXdr = historical.resultMetaXdr;
+              (tx as any).result_meta_xdr = historical.resultMetaXdr;
+            }
+            if (historical.envelopeXdr && !(tx as any).envelope_xdr) {
+              (tx as any).envelope_xdr = historical.envelopeXdr;
+            }
+            if (historical.resultXdr && !(tx as any).result_xdr) {
+              (tx as any).result_xdr = historical.resultXdr;
+            }
+          }
+        } catch (histFallbackErr) {
         }
       }
     } catch (sorobanError) {
@@ -1933,6 +1983,75 @@ const querySorobanRpc = async (hash: string, config?: NetworkConfig) => {
 
 
   return data.result;
+};
+
+export const fetchHistoricalTransactionFallback = async (
+  hash: string,
+  config?: NetworkConfig
+): Promise<HistoricalArchiveData | null> => {
+  const activeConfig = config || networkConfig;
+  const isTestnet = Boolean(activeConfig.isTestnet);
+
+  // 1. Try StellarExpert Historical Archive API
+  const expertBase = isTestnet
+    ? 'https://api.stellar.expert/explorer/testnet/tx'
+    : 'https://api.stellar.expert/explorer/public/tx';
+
+  try {
+    const expertResponse = await fetchWithTimeout(
+      `${expertBase}/${encodeURIComponent(hash)}`,
+      { headers: { 'Accept': 'application/json' } },
+      7000
+    );
+
+    if (expertResponse.ok) {
+      const data = await expertResponse.json();
+      if (data && (data.body || data.meta || data.result)) {
+        return {
+          hash: data.hash || hash,
+          envelopeXdr: data.body,
+          resultXdr: data.result,
+          resultMetaXdr: data.meta,
+          ledger: data.ledger,
+          createdAt: data.ts ? new Date(data.ts * 1000).toISOString() : undefined,
+          successful: true,
+        };
+      }
+    }
+  } catch (expertErr) {
+    // Continue gracefully to next fallback
+  }
+
+  // 2. Try secondary public Horizon archive endpoints if primary missed
+  const fallbackHorizonUrls = isTestnet
+    ? ['https://horizon-testnet.stellar.org']
+    : ['https://horizon.stellar.lobstr.co', 'https://horizon.stellar.org'];
+
+  for (const horizonUrl of fallbackHorizonUrls) {
+    if (activeConfig.networkUrl && horizonUrl === activeConfig.networkUrl) continue;
+    try {
+      const resp = await fetchWithTimeout(`${horizonUrl}/transactions/${encodeURIComponent(hash)}`, {}, 6000);
+      if (resp.ok) {
+        const txData = await resp.json();
+        return {
+          hash: txData.hash || hash,
+          envelopeXdr: txData.envelope_xdr,
+          resultXdr: txData.result_xdr,
+          resultMetaXdr: txData.result_meta_xdr,
+          ledger: txData.ledger,
+          createdAt: txData.created_at,
+          sourceAccount: txData.source_account,
+          feeCharged: String(txData.fee_charged || '0'),
+          operationCount: txData.operation_count,
+          successful: Boolean(txData.successful),
+        };
+      }
+    } catch (altHorizonErr) {
+      // Continue to next endpoint
+    }
+  }
+
+  return null;
 };
 
 const extractContractId = async (operation: any, sorobanData: any, operationIndex: number, transactionHash?: string, envelopeXdr?: string): Promise<string> => {
@@ -4078,11 +4197,71 @@ export const simulateTransactionWithDebugger = async (
   const activeServer = customServer || server || new Horizon.Server(activeConfig.networkUrl);
 
   try {
-    const tx = horizonTx || await activeServer.transactions().transaction(hash).call();
-    const operations = await activeServer.operations().forTransaction(hash).limit(200).call();
+    let tx = horizonTx;
+    if (!tx) {
+      try {
+        tx = await activeServer.transactions().transaction(hash).call();
+      } catch (hErr) {
+        const historical = await fetchHistoricalTransactionFallback(hash, activeConfig);
+        if (historical) {
+          tx = {
+            id: hash,
+            hash: hash,
+            created_at: historical.createdAt || new Date().toISOString(),
+            source_account: historical.sourceAccount || '',
+            fee_charged: historical.feeCharged || '0',
+            successful: historical.successful !== false,
+            ledger: historical.ledger || 0,
+            result_meta_xdr: historical.resultMetaXdr,
+            envelope_xdr: historical.envelopeXdr,
+            result_xdr: historical.resultXdr,
+          };
+        } else {
+          throw hErr;
+        }
+      }
+    }
+
+    let operations: any = null;
+    try {
+      operations = await activeServer.operations().forTransaction(hash).limit(200).call();
+    } catch (opErr) {
+      operations = { records: [] };
+      if (tx && tx.envelope_xdr) {
+        try {
+          const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(tx.envelope_xdr, 'base64');
+          const envSwitch = envelope.switch();
+          let transaction: any = null;
+          if (envSwitch.name === 'envelopeTypeTx') {
+            transaction = envelope.v1().tx();
+          } else if (envSwitch.name === 'envelopeTypeTxV0') {
+            transaction = envelope.v0().tx();
+          } else if (envSwitch.name === 'envelopeTypeTxFeeBump' && envelope.feeBump()) {
+            const inner = envelope.feeBump().tx().innerTx();
+            if (inner.switch().name === 'envelopeTypeTx') {
+              transaction = inner.v1().tx();
+            }
+          }
+          if (transaction) {
+            const xdrOps = transaction.operations();
+            operations.records = xdrOps.map((xdrOp: any, index: number) => {
+              const body = xdrOp.body();
+              const opType = body.switch().name;
+              return {
+                id: `${hash}-${index}`,
+                transaction_hash: hash,
+                type: opType === 'invokeHostFunctionOp' ? 'invoke_host_function' : opType,
+                type_i: index,
+                source_account: tx.source_account
+              };
+            });
+          }
+        } catch (envOpErr) {}
+      }
+    }
 
     // Normalize source_account fields immediately - Horizon sometimes returns arrays
-    operations.records = operations.records.map(op => ({
+    operations.records = operations.records.map((op: any) => ({
       ...op,
       source_account: extractAccountAddress(op.source_account)
     }));
@@ -4098,7 +4277,7 @@ export const simulateTransactionWithDebugger = async (
     }
 
     // Check if Soroban transaction
-    const hasSorobanOps = operations.records.some(op => op.type === 'invoke_host_function');
+    const hasSorobanOps = operations.records.some((op: any) => op.type === 'invoke_host_function');
 
     // Query Soroban RPC for real resource usage
     let sorobanData = null;
@@ -4106,6 +4285,37 @@ export const simulateTransactionWithDebugger = async (
     if (hasSorobanOps) {
       try {
         sorobanData = await querySorobanRpc(hash, activeConfig);
+
+        // Historical archival fallback for Soroban transactions older than 7 days
+        if (!sorobanData || sorobanData.status === 'NOT_FOUND' || !sorobanData.resultMetaXdr) {
+          try {
+            const historical = await fetchHistoricalTransactionFallback(hash, activeConfig);
+            if (historical) {
+              if (!sorobanData) {
+                sorobanData = {
+                  status: historical.successful !== false ? 'SUCCESS' : 'FAILED',
+                  envelopeXdr: historical.envelopeXdr,
+                  resultMetaXdr: historical.resultMetaXdr,
+                  resultXdr: historical.resultXdr,
+                  ledger: historical.ledger,
+                  createdAt: historical.createdAt,
+                  events: []
+                };
+              } else {
+                sorobanData.resultMetaXdr = historical.resultMetaXdr || sorobanData.resultMetaXdr;
+              }
+              if (historical.resultMetaXdr && !(tx as any).result_meta_xdr) {
+                (tx as any).result_meta_xdr = historical.resultMetaXdr;
+              }
+              if (historical.envelopeXdr && !(tx as any).envelope_xdr) {
+                (tx as any).envelope_xdr = historical.envelopeXdr;
+              }
+              if (historical.resultXdr && !(tx as any).result_xdr) {
+                (tx as any).result_xdr = historical.resultXdr;
+              }
+            }
+          } catch (hErr) {}
+        }
 
         // Extract actual consumed resources directly from RPC response
         // Stellar RPC returns CPU and memory in the transaction result

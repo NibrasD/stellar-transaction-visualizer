@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   StellarTransactionVisualizer,
   decodeScVal,
   setNetwork,
+  fetchHistoricalTransactionFallback,
 } from '../src/sdk/index';
 import * as StellarSdk from '@stellar/stellar-sdk';
 
@@ -152,3 +153,90 @@ describe('ScVal Decoding', () => {
     expect(decodeScVal(undefined)).toBeNull();
   });
 });
+
+describe('Historical Archive Fallback', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('exposes getHistoricalTransactionFallback on instance and standalone', () => {
+    const visualizer = new StellarTransactionVisualizer();
+    expect(typeof visualizer.getHistoricalTransactionFallback).toBe('function');
+    expect(typeof fetchHistoricalTransactionFallback).toBe('function');
+  });
+
+  it('successfully retrieves and parses historical data from StellarExpert archive', async () => {
+    const mockHash = 'a'.repeat(64);
+    const mockData = {
+      hash: mockHash,
+      body: 'AAAA...envelope',
+      meta: 'AAAA...meta',
+      result: 'AAAA...result',
+      ledger: 50000000,
+      ts: 1700000000,
+    };
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockData,
+    } as any);
+
+    const result = await fetchHistoricalTransactionFallback(mockHash, {
+      isTestnet: false,
+      networkUrl: 'https://horizon.stellar.org',
+      networkPassphrase: 'Public Global Stellar Network ; September 2015',
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.hash).toBe(mockHash);
+    expect(result?.envelopeXdr).toBe('AAAA...envelope');
+    expect(result?.resultMetaXdr).toBe('AAAA...meta');
+    expect(result?.resultXdr).toBe('AAAA...result');
+    expect(result?.ledger).toBe(50000000);
+    expect(result?.createdAt).toBe(new Date(1700000000 * 1000).toISOString());
+    expect(fetchSpy).toHaveBeenCalled();
+  });
+
+  it('falls back to secondary Horizon archive when StellarExpert is unreachable', async () => {
+    const mockHash = 'b'.repeat(64);
+    const mockHorizonTx = {
+      hash: mockHash,
+      envelope_xdr: 'BBBB...envelope',
+      result_meta_xdr: 'BBBB...meta',
+      result_xdr: 'BBBB...result',
+      ledger: 49000000,
+      created_at: '2025-01-01T00:00:00Z',
+      source_account: 'GAA...',
+      fee_charged: '100',
+      successful: true,
+    };
+
+    // First call (StellarExpert) fails, second call (secondary Horizon) succeeds
+    vi.spyOn(globalThis, 'fetch')
+      .mockRejectedValueOnce(new Error('Network timeout'))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockHorizonTx,
+      } as any);
+
+    const result = await fetchHistoricalTransactionFallback(mockHash, {
+      isTestnet: false,
+      networkUrl: 'https://custom-horizon.example.com',
+      networkPassphrase: 'Public Global Stellar Network ; September 2015',
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.envelopeXdr).toBe('BBBB...envelope');
+    expect(result?.resultMetaXdr).toBe('BBBB...meta');
+    expect(result?.successful).toBe(true);
+  });
+
+  it('gracefully returns null if all fallback archive endpoints fail', async () => {
+    const mockHash = 'c'.repeat(64);
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('All networks down'));
+
+    const result = await fetchHistoricalTransactionFallback(mockHash);
+    expect(result).toBeNull();
+  });
+});
+

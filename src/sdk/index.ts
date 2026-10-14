@@ -6,10 +6,12 @@ import {
   ContractEvent,
   StateChange,
   CrossContractCall,
-  TransactionEffect
+  TransactionEffect,
+  HistoricalArchiveData
 } from '../types/stellar.js';
 import {
   fetchTransaction,
+  fetchHistoricalTransactionFallback,
   setNetwork,
   decodeScVal,
   simulateTransaction,
@@ -41,6 +43,15 @@ export class StellarTransactionVisualizer {
    */
   async getTransactionDetails(hash: string): Promise<TransactionDetails> {
     return fetchTransaction(hash, this.config, this.server);
+  }
+
+  /**
+   * Fetches historical transaction data using the multi-tier archival fallback
+   * @param hash Transaction hash
+   * @returns Historical archive data or null if not found
+   */
+  async getHistoricalTransactionFallback(hash: string): Promise<HistoricalArchiveData | null> {
+    return fetchHistoricalTransactionFallback(hash, this.config);
   }
 
   /**
@@ -137,6 +148,7 @@ export class StellarTransactionVisualizer {
 // Export standalone functions for direct use
 export {
   fetchTransaction,
+  fetchHistoricalTransactionFallback,
   setNetwork,
   decodeScVal,
   simulateTransaction,
@@ -155,6 +167,7 @@ export type {
   StateChange,
   CrossContractCall,
   TransactionEffect,
+  HistoricalArchiveData,
   ResourceUsage,
   TtlExtension,
   TransactionDebugInfo,

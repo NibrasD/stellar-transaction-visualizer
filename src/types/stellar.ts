@@ -252,3 +252,16 @@ export interface TransactionEffect {
   operation?: any;
   [key: string]: any;
 }
+
+export interface HistoricalArchiveData {
+  hash: string;
+  envelopeXdr?: string;
+  resultXdr?: string;
+  resultMetaXdr?: string;
+  ledger?: number;
+  createdAt?: string;
+  sourceAccount?: string;
+  feeCharged?: string;
+  operationCount?: number;
+  successful?: boolean;
+}
