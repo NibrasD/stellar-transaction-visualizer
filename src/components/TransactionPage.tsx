@@ -39,14 +39,14 @@ export function TransactionPage({ networkConfig }: TransactionPageProps) {
       setSelectedTransaction(null);
       setError(null);
     }
-  }, [hash]);
+  }, [hash, networkConfig]);
 
   const handleSearch = async (value: string) => {
     setIsLoading(true);
     setError(null);
 
     try {
-      const txData = await fetchTransaction(value);
+      const txData = await fetchTransaction(value, networkConfig);
       setSelectedTransaction(txData);
 
       // If we searched from the search box, navigate to the tx URL

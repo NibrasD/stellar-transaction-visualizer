@@ -695,7 +695,7 @@ export const fetchTransaction = async (
   let tx: any = null;
   let isArchiveTransaction = false;
   const activeConfig = customConfig || networkConfig;
-  const activeServer = customServer || server || new Horizon.Server(activeConfig.networkUrl);
+  const activeServer = customServer || (customConfig ? new Horizon.Server(activeConfig.networkUrl) : server) || new Horizon.Server(activeConfig.networkUrl);
 
   try {
     if (!activeServer) {
@@ -1993,33 +1993,47 @@ export const fetchHistoricalTransactionFallback = async (
   const isTestnet = Boolean(activeConfig.isTestnet);
 
   // 1. Try StellarExpert Historical Archive API
-  const expertBase = isTestnet
-    ? 'https://api.stellar.expert/explorer/testnet/tx'
-    : 'https://api.stellar.expert/explorer/public/tx';
-
-  try {
-    const expertResponse = await fetchWithTimeout(
-      `${expertBase}/${encodeURIComponent(hash)}`,
-      { headers: { 'Accept': 'application/json' } },
-      7000
+  // In the browser, prefer the reverse proxy /api/stellar-expert to avoid browser origin CORS restrictions
+  const isBrowser = typeof window !== 'undefined';
+  const expertCandidates: string[] = [];
+  if (isBrowser) {
+    expertCandidates.push(
+      isTestnet
+        ? `/api/stellar-expert/explorer/testnet/tx/${encodeURIComponent(hash)}`
+        : `/api/stellar-expert/explorer/public/tx/${encodeURIComponent(hash)}`
     );
+  }
+  expertCandidates.push(
+    isTestnet
+      ? `https://api.stellar.expert/explorer/testnet/tx/${encodeURIComponent(hash)}`
+      : `https://api.stellar.expert/explorer/public/tx/${encodeURIComponent(hash)}`
+  );
 
-    if (expertResponse.ok) {
-      const data = await expertResponse.json();
-      if (data && (data.body || data.meta || data.result)) {
-        return {
-          hash: data.hash || hash,
-          envelopeXdr: data.body,
-          resultXdr: data.result,
-          resultMetaXdr: data.meta,
-          ledger: data.ledger,
-          createdAt: data.ts ? new Date(data.ts * 1000).toISOString() : undefined,
-          successful: true,
-        };
+  for (const expertUrl of expertCandidates) {
+    try {
+      const expertResponse = await fetchWithTimeout(
+        expertUrl,
+        { headers: { 'Accept': 'application/json' } },
+        7000
+      );
+
+      if (expertResponse.ok) {
+        const data = await expertResponse.json();
+        if (data && (data.body || data.meta || data.result)) {
+          return {
+            hash: data.hash || hash,
+            envelopeXdr: data.body,
+            resultXdr: data.result,
+            resultMetaXdr: data.meta,
+            ledger: data.ledger,
+            createdAt: data.ts ? new Date(data.ts * 1000).toISOString() : undefined,
+            successful: true,
+          };
+        }
       }
+    } catch (expertErr) {
+      // Continue gracefully to next fallback
     }
-  } catch (expertErr) {
-    // Continue gracefully to next fallback
   }
 
   // 2. Try secondary public Horizon archive endpoints if primary missed
@@ -2028,23 +2042,24 @@ export const fetchHistoricalTransactionFallback = async (
     : ['https://horizon.stellar.lobstr.co', 'https://horizon.stellar.org'];
 
   for (const horizonUrl of fallbackHorizonUrls) {
-    if (activeConfig.networkUrl && horizonUrl === activeConfig.networkUrl) continue;
     try {
-      const resp = await fetchWithTimeout(`${horizonUrl}/transactions/${encodeURIComponent(hash)}`, {}, 6000);
+      const resp = await fetchWithTimeout(`${horizonUrl}/transactions/${encodeURIComponent(hash)}`, {}, 10000);
       if (resp.ok) {
         const txData = await resp.json();
-        return {
-          hash: txData.hash || hash,
-          envelopeXdr: txData.envelope_xdr,
-          resultXdr: txData.result_xdr,
-          resultMetaXdr: txData.result_meta_xdr,
-          ledger: txData.ledger,
-          createdAt: txData.created_at,
-          sourceAccount: txData.source_account,
-          feeCharged: String(txData.fee_charged || '0'),
-          operationCount: txData.operation_count,
-          successful: Boolean(txData.successful),
-        };
+        if (txData && (txData.envelope_xdr || txData.result_meta_xdr || txData.result_xdr)) {
+          return {
+            hash: txData.hash || hash,
+            envelopeXdr: txData.envelope_xdr,
+            resultXdr: txData.result_xdr,
+            resultMetaXdr: txData.result_meta_xdr,
+            ledger: txData.ledger,
+            createdAt: txData.created_at,
+            sourceAccount: txData.source_account,
+            feeCharged: String(txData.fee_charged || '0'),
+            operationCount: txData.operation_count,
+            successful: Boolean(txData.successful),
+          };
+        }
       }
     } catch (altHorizonErr) {
       // Continue to next endpoint
@@ -4194,7 +4209,7 @@ export const simulateTransactionWithDebugger = async (
   customServer?: Horizon.Server
 ) => {
   const activeConfig = customConfig || networkConfig;
-  const activeServer = customServer || server || new Horizon.Server(activeConfig.networkUrl);
+  const activeServer = customServer || (customConfig ? new Horizon.Server(activeConfig.networkUrl) : server) || new Horizon.Server(activeConfig.networkUrl);
 
   try {
     let tx = horizonTx;
