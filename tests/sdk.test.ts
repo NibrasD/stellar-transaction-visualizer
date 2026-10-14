@@ -165,20 +165,23 @@ describe('Historical Archive Fallback', () => {
     expect(typeof fetchHistoricalTransactionFallback).toBe('function');
   });
 
-  it('successfully retrieves and parses historical data from StellarExpert archive', async () => {
+  it('successfully retrieves and parses historical data from public Horizon archive nodes', async () => {
     const mockHash = 'a'.repeat(64);
-    const mockData = {
+    const mockHorizonTx = {
       hash: mockHash,
-      body: 'AAAA...envelope',
-      meta: 'AAAA...meta',
-      result: 'AAAA...result',
+      envelope_xdr: 'AAAA...envelope',
+      result_meta_xdr: 'AAAA...meta',
+      result_xdr: 'AAAA...result',
       ledger: 50000000,
-      ts: 1700000000,
+      created_at: '2026-09-01T00:00:00Z',
+      source_account: 'GAA...',
+      fee_charged: '100',
+      successful: true,
     };
 
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
-      json: async () => mockData,
+      json: async () => mockHorizonTx,
     } as any);
 
     const result = await fetchHistoricalTransactionFallback(mockHash, {
@@ -193,11 +196,11 @@ describe('Historical Archive Fallback', () => {
     expect(result?.resultMetaXdr).toBe('AAAA...meta');
     expect(result?.resultXdr).toBe('AAAA...result');
     expect(result?.ledger).toBe(50000000);
-    expect(result?.createdAt).toBe(new Date(1700000000 * 1000).toISOString());
+    expect(result?.createdAt).toBe('2026-09-01T00:00:00Z');
     expect(fetchSpy).toHaveBeenCalled();
   });
 
-  it('falls back to secondary Horizon archive when StellarExpert is unreachable', async () => {
+  it('falls back across secondary Horizon archive endpoints when primary endpoint times out', async () => {
     const mockHash = 'b'.repeat(64);
     const mockHorizonTx = {
       hash: mockHash,
@@ -211,7 +214,7 @@ describe('Historical Archive Fallback', () => {
       successful: true,
     };
 
-    // First call (StellarExpert) fails, second call (secondary Horizon) succeeds
+    // First endpoint fails, second succeeds
     vi.spyOn(globalThis, 'fetch')
       .mockRejectedValueOnce(new Error('Network timeout'))
       .mockResolvedValueOnce({

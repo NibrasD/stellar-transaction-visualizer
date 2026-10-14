@@ -11,13 +11,4 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: false, // Don't empty dist folder (preserves SDK files)
   },
-  server: {
-    proxy: {
-      '/api/stellar-expert': {
-        target: 'https://api.stellar.expert',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/stellar-expert/, ''),
-      },
-    },
-  },
 });

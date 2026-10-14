@@ -13,10 +13,6 @@
       "destination": "https://generativelanguage.googleapis.com/:path*"
     },
     {
-      "source": "/api/stellar-expert/:path*",
-      "destination": "https://api.stellar.expert/:path*"
-    },
-    {
       "source": "/((?!vertex|api).*)",
       "destination": "/index.html"
     }

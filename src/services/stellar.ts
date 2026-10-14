@@ -1992,51 +1992,7 @@ export const fetchHistoricalTransactionFallback = async (
   const activeConfig = config || networkConfig;
   const isTestnet = Boolean(activeConfig.isTestnet);
 
-  // 1. Try StellarExpert Historical Archive API
-  // In the browser, prefer the reverse proxy /api/stellar-expert to avoid browser origin CORS restrictions
-  const isBrowser = typeof window !== 'undefined';
-  const expertCandidates: string[] = [];
-  if (isBrowser) {
-    expertCandidates.push(
-      isTestnet
-        ? `/api/stellar-expert/explorer/testnet/tx/${encodeURIComponent(hash)}`
-        : `/api/stellar-expert/explorer/public/tx/${encodeURIComponent(hash)}`
-    );
-  }
-  expertCandidates.push(
-    isTestnet
-      ? `https://api.stellar.expert/explorer/testnet/tx/${encodeURIComponent(hash)}`
-      : `https://api.stellar.expert/explorer/public/tx/${encodeURIComponent(hash)}`
-  );
-
-  for (const expertUrl of expertCandidates) {
-    try {
-      const expertResponse = await fetchWithTimeout(
-        expertUrl,
-        { headers: { 'Accept': 'application/json' } },
-        7000
-      );
-
-      if (expertResponse.ok) {
-        const data = await expertResponse.json();
-        if (data && (data.body || data.meta || data.result)) {
-          return {
-            hash: data.hash || hash,
-            envelopeXdr: data.body,
-            resultXdr: data.result,
-            resultMetaXdr: data.meta,
-            ledger: data.ledger,
-            createdAt: data.ts ? new Date(data.ts * 1000).toISOString() : undefined,
-            successful: true,
-          };
-        }
-      }
-    } catch (expertErr) {
-      // Continue gracefully to next fallback
-    }
-  }
-
-  // 2. Try secondary public Horizon archive endpoints if primary missed
+  // Query official public Horizon archive nodes that retain complete transaction ledger metadata
   const fallbackHorizonUrls = isTestnet
     ? ['https://horizon-testnet.stellar.org']
     : ['https://horizon.stellar.lobstr.co', 'https://horizon.stellar.org'];
@@ -2375,28 +2331,64 @@ const extractFunctionDetails = (operation: any, sorobanData: any, operationIndex
     details.functionName = operation.function;
   }
 
-  // Try to extract from XDR
+  // Try to extract from XDR: operation.host_function_xdr or tx.envelope_xdr
   try {
+    let hostFunction: any = null;
     if (operation.host_function_xdr) {
-      const hostFunction = StellarSdk.xdr.HostFunction.fromXDR(operation.host_function_xdr, 'base64');
-
-      if (hostFunction.switch() === StellarSdk.xdr.HostFunctionType.hostFunctionTypeInvokeContract()) {
-        const invokeContract = hostFunction.invokeContract();
-        const functionName = invokeContract.functionName().toString();
-        details.functionName = functionName;
-
-        const args = invokeContract.args();
-        // Decode args to human-readable format
-        details.args = args.map((arg: any) => {
-          try {
-            return decodeScVal(arg);
-          } catch (e) {
-            return arg.toString();
+      hostFunction = StellarSdk.xdr.HostFunction.fromXDR(operation.host_function_xdr, 'base64');
+    } else if (tx && tx.envelope_xdr) {
+      const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(tx.envelope_xdr, 'base64');
+      let txBody: any = null;
+      if (envelope.switch().name === 'envelopeTypeTx') {
+        txBody = envelope.v1().tx();
+      } else if (envelope.switch().name === 'envelopeTypeTxV0') {
+        txBody = envelope.v0().tx();
+      } else if (envelope.switch().name === 'envelopeTypeTxFeeBump' && envelope.feeBump()) {
+        const inner = envelope.feeBump().tx().innerTx();
+        if (inner.switch().name === 'envelopeTypeTx') {
+          txBody = inner.v1().tx();
+        }
+      }
+      if (txBody) {
+        const xdrOps = txBody.operations();
+        if (xdrOps && xdrOps[operationIndex]) {
+          const body = xdrOps[operationIndex].body();
+          if (body.switch().name === 'invokeHostFunction') {
+            hostFunction = body.invokeHostFunctionOp().hostFunction();
           }
-        });
+        }
       }
     }
+
+    if (hostFunction && hostFunction.switch() === StellarSdk.xdr.HostFunctionType.hostFunctionTypeInvokeContract()) {
+      const invokeContract = hostFunction.invokeContract();
+      const functionName = invokeContract.functionName().toString();
+      details.functionName = functionName;
+
+      const args = invokeContract.args();
+      // Decode args to human-readable format
+      details.args = args.map((arg: any) => {
+        try {
+          return decodeScVal(arg);
+        } catch (e) {
+          return arg.toString();
+        }
+      });
+    }
   } catch (error) {
+  }
+
+  // If function name is still generic HostFunctionType..., check if operation.parameters has the function symbol
+  if (details.functionName === 'HostFunctionTypeHostFunctionTypeInvokeContract' || details.functionName === 'invoke') {
+    if (operation.parameters && operation.parameters.length >= 2 && operation.parameters[1].type === 'Sym') {
+      try {
+        const symVal = StellarSdk.xdr.ScVal.fromXDR(operation.parameters[1].value, 'base64');
+        const decodedSym = decodeScVal(symVal);
+        if (decodedSym && typeof decodedSym === 'string') {
+          details.functionName = decodedSym;
+        }
+      } catch (symErr) {}
+    }
   }
 
   // Parse parameters if available (only if XDR extraction didn't work)
