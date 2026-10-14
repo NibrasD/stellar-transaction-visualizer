@@ -87,6 +87,29 @@ class SimpleContractMetadataService {
       return this.memoryCache.get(cacheKey)!;
     }
 
+    // Built-in metadata for official Stellar Asset Contracts (Native XLM)
+    if (
+      contractId === 'CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA' ||
+      contractId === 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC'
+    ) {
+      const nativeSacMetadata: ContractMetadata = {
+        contractId,
+        network: this.network,
+        isToken: true,
+        tokenName: 'Stellar Lumens',
+        tokenSymbol: 'XLM',
+        tokenDecimals: 7,
+        functions: [
+          { name: 'transfer', inputs: [{ name: 'from' }, { name: 'to' }, { name: 'amount' }] },
+          { name: 'balance', inputs: [{ name: 'id' }] },
+          { name: 'decimals', inputs: [] },
+          { name: 'symbol', inputs: [] }
+        ]
+      };
+      this.memoryCache.set(cacheKey, nativeSacMetadata);
+      return nativeSacMetadata;
+    }
+
     if (supabase) {
       const { data, error } = await supabase
         .from('contract_metadata')

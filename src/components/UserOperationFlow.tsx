@@ -1199,17 +1199,17 @@ function UserOperationFlowInner({ events, sourceAccount, functionName, assetBala
       if (assetBalanceChanges && assetBalanceChanges.length > 0) {
         // Find debits (what user spent) and credits (what user received)
         const userChanges = assetBalanceChanges.filter((change: any) =>
-          change.address === sourceAccount
+          change.address === sourceAccount || change.from === sourceAccount || change.to === sourceAccount
         );
 
-        const debits = userChanges.filter((c: any) => parseFloat(c.amount) < 0);
-        const credits = userChanges.filter((c: any) => parseFloat(c.amount) > 0);
+        const debits = userChanges.filter((c: any) => parseFloat(c.amount) < 0 || c.from === sourceAccount);
+        const credits = userChanges.filter((c: any) => parseFloat(c.amount) > 0 || c.to === sourceAccount);
 
-        if (debits.length > 0 && credits.length > 0) {
+        if (debits.length > 0 && credits.length > 0 && debits[0] !== credits[0]) {
           const tradeSummaryId = 'trade-summary';
-          const debitAsset = debits[0].asset_code || 'XLM';
+          const debitAsset = debits[0].asset_type === 'native' ? 'XLM' : (debits[0].asset_code || 'XLM');
           const debitAmount = Math.abs(parseFloat(debits[0].amount)).toFixed(2);
-          const creditAsset = credits[0].asset_code || 'XLM';
+          const creditAsset = credits[0].asset_type === 'native' ? 'XLM' : (credits[0].asset_code || 'XLM');
           const creditAmount = Math.abs(parseFloat(credits[0].amount)).toFixed(2);
 
           generatedNodes.push({
@@ -1285,7 +1285,7 @@ function UserOperationFlowInner({ events, sourceAccount, functionName, assetBala
               content.push(`Events: ${Array.from(eventTypes).join(', ')}`);
             }
           } else {
-            content.push('No diagnostic events available');
+            content.push('Status: Confirmed on Ledger');
           }
 
           const operationNode: Node = {
@@ -1310,6 +1310,43 @@ function UserOperationFlowInner({ events, sourceAccount, functionName, assetBala
               target: operationId,
               animated: false,
               style: { stroke: '#10b981', strokeWidth: 2 }
+            });
+          }
+
+          // Render any balance changes downstream
+          if (assetBalanceChanges && assetBalanceChanges.length > 0) {
+            assetBalanceChanges.forEach((change: any, cIdx: number) => {
+              const changeId = `change-${cIdx}`;
+              const assetName = change.asset_type === 'native' ? 'XLM' : change.asset_code || 'Asset';
+              const fromStr = change.from ? formatAddress(change.from) : '';
+              const toStr = change.to ? formatAddress(change.to) : '';
+              const changeContent: string[] = [];
+              if (fromStr) changeContent.push(`From: ${fromStr}`);
+              if (toStr) changeContent.push(`To: ${toStr}`);
+              if (change.amount) changeContent.push(`Amount: ${change.amount} ${assetName}`);
+
+              yOffset += 140;
+              generatedNodes.push({
+                id: changeId,
+                type: 'operation',
+                position: { x: 400, y: yOffset },
+                data: {
+                  emoji: '💸',
+                  title: change.type === 'transfer' ? `Transfer: ${change.amount} ${assetName}` : `Balance Change: ${change.amount} ${assetName}`,
+                  content: changeContent,
+                  isOperation: false
+                }
+              });
+
+              generatedEdges.push({
+                id: `${operationId}-${changeId}`,
+                source: operationId,
+                target: changeId,
+                type: 'straight',
+                animated: true,
+                markerEnd: { type: MarkerType.ArrowClosed, color: '#10b981' },
+                style: { stroke: '#10b981', strokeWidth: 2 }
+              });
             });
           }
         }

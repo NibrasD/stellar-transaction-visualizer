@@ -1460,25 +1460,17 @@ export const fetchTransaction = async (
     // Fetch transaction effects
     let effects: any[] = [];
 
-    // Only fetch Horizon effects if there are classical operations
-    // For pure Soroban transactions, we extract effects from XDR state changes instead
-    if (hasClassicalOperations) {
-      try {
+    // Fetch transaction effects from Horizon
+    try {
+      if (tx && tx.effects && typeof tx.effects === 'function') {
         const effectsResponse = await tx.effects({ limit: 200 });
-        const horizonEffects = effectsResponse.records || [];
-
-        // If there are also Soroban operations, filter out any Soroban-related effects from Horizon
-        // to avoid duplicates (we extract those from XDR)
-        if (hasSorobanOperations) {
-          effects = horizonEffects.filter((effect: any) =>
-            !effect.type.includes('contract_') &&
-            effect.type !== 'liquidity_pool_trade' // Soroban can also trigger this
-          );
-        } else {
-          effects = horizonEffects;
-        }
-      } catch (effectsError: any) {
+        effects = effectsResponse.records || [];
+      } else if (activeServer) {
+        const effectsResponse = await activeServer.effects().forTransaction(hash).limit(200).call();
+        effects = effectsResponse.records || [];
       }
+    } catch (effectsError: any) {
+    }
 
       // Decode base64 values in data-related effects
       effects = effects.map((effect: any) => {
@@ -1501,7 +1493,6 @@ export const fetchTransaction = async (
         }
         return effect;
       });
-    }
 
     // Add Soroban contract effects extracted from XDR state changes
     // These are more accurate than Horizon effects for Soroban operations
@@ -2430,6 +2421,243 @@ const extractFunctionDetails = (operation: any, sorobanData: any, operationIndex
       details.crossContractCalls = metaDetails.crossContractCalls;
     } catch (error) {
     }
+  }
+
+  // Helper to extract authorized invocations from envelope XDR
+  const extractAuthInvocations = (): any[] => {
+    const invocations: any[] = [];
+    if (!tx || !tx.envelope_xdr) return invocations;
+
+    try {
+      const envelope = StellarSdk.xdr.TransactionEnvelope.fromXDR(tx.envelope_xdr, 'base64');
+      let txBody: any = null;
+      const envSwitch = envelope.switch().name;
+
+      if (envSwitch === 'envelopeTypeTx') {
+        txBody = envelope.v1().tx();
+      } else if (envSwitch === 'envelopeTypeTxV0') {
+        txBody = envelope.v0().tx();
+      } else if (envSwitch === 'envelopeTypeTxFeeBump' && envelope.feeBump()) {
+        const inner = envelope.feeBump().tx().innerTx();
+        if (inner.switch().name === 'envelopeTypeTx') {
+          txBody = inner.v1().tx();
+        }
+      }
+
+      if (!txBody) return invocations;
+      const xdrOps = txBody.operations();
+      if (!xdrOps || !xdrOps[operationIndex]) return invocations;
+
+      const opBody = xdrOps[operationIndex].body();
+      if (opBody.switch().name !== 'invokeHostFunction') return invocations;
+
+      const hostFnOp = opBody.invokeHostFunctionOp();
+      const authList = hostFnOp.auth ? hostFnOp.auth() : [];
+
+      const traverseInvocation = (inv: any): any[] => {
+        try {
+          const fn = inv.function();
+          if (fn.switch().name === 'sorobanAuthorizedFunctionTypeContractFn') {
+            const cFn = fn.contractFn();
+            const addr = cFn.contractAddress();
+            let contractId = '';
+            if (addr.switch().name === 'scAddressTypeContract') {
+              contractId = StellarSdk.StrKey.encodeContract(addr.contractId());
+            } else if (addr.switch().name === 'scAddressTypeAccount') {
+              contractId = StellarSdk.StrKey.encodeEd25519PublicKey(addr.accountId().ed25519());
+            }
+            const functionName = cFn.functionName().toString();
+            const args = cFn.args().map((a: any) => {
+              try {
+                return decodeScVal(a);
+              } catch {
+                return String(a);
+              }
+            });
+
+            const subInvs: any[] = [];
+            const sub = inv.subInvocations ? inv.subInvocations() : [];
+            for (const s of sub) {
+              subInvs.push(...traverseInvocation(s));
+            }
+
+            return [{
+              contractId,
+              functionName,
+              args,
+              subInvocations: subInvs
+            }];
+          }
+        } catch (e) {}
+        return [];
+      };
+
+      for (const auth of authList) {
+        try {
+          const root = auth.rootInvocation();
+          const subs = root.subInvocations ? root.subInvocations() : [];
+          for (const s of subs) {
+            invocations.push(...traverseInvocation(s));
+          }
+        } catch (e) {}
+      }
+    } catch (err) {}
+
+    return invocations;
+  };
+
+  // Reconstruct event stream and call hierarchy from transaction envelope and Horizon balance changes
+  // whenever Soroban RPC diagnostic events are pruned (transactions beyond 7-day RPC retention)
+  const hasFnCalls = details.events.some((e: any) => {
+    const top = e.topics?.[0];
+    const topStr = typeof top === 'string' ? top : (decodeScVal(top) || '');
+    return topStr === 'fn_call';
+  });
+
+  if (!hasFnCalls) {
+    const targetContract = knownContractId || (operation.contract_id || operation.contractId || 'Unknown');
+    const authInvocations = extractAuthInvocations();
+    const synthesizedEvents: any[] = [];
+
+    // 1. Root function invocation
+    synthesizedEvents.push({
+      contractId: targetContract,
+      type: 'diagnostic',
+      topics: ['fn_call', targetContract, details.functionName],
+      data: details.args || [],
+      inSuccessfulContractCall: true
+    });
+
+    // Helper to recursively process sub-invocations
+    const processInvocation = (inv: any) => {
+      synthesizedEvents.push({
+        contractId: inv.contractId,
+        type: 'diagnostic',
+        topics: ['fn_call', inv.contractId, inv.functionName],
+        data: inv.args || [],
+        inSuccessfulContractCall: true
+      });
+
+      const lowerFn = inv.functionName.toLowerCase();
+      if (lowerFn === 'transfer' && inv.args && inv.args.length >= 3) {
+        synthesizedEvents.push({
+          contractId: inv.contractId,
+          type: 'contract',
+          topics: ['transfer', inv.args[0], inv.args[1]],
+          data: typeof inv.args[2] === 'bigint' ? inv.args[2].toString() : inv.args[2],
+          inSuccessfulContractCall: true
+        });
+      } else if ((lowerFn === 'mint' || lowerFn === 'burn') && inv.args && inv.args.length >= 2) {
+        synthesizedEvents.push({
+          contractId: inv.contractId,
+          type: 'contract',
+          topics: [lowerFn, inv.args[0]],
+          data: typeof inv.args[1] === 'bigint' ? inv.args[1].toString() : inv.args[1],
+          inSuccessfulContractCall: true
+        });
+      }
+
+      if (inv.subInvocations && Array.isArray(inv.subInvocations)) {
+        for (const child of inv.subInvocations) {
+          processInvocation(child);
+        }
+      }
+
+      synthesizedEvents.push({
+        contractId: inv.contractId,
+        type: 'diagnostic',
+        topics: ['fn_return', inv.functionName],
+        data: 'void',
+        inSuccessfulContractCall: true
+      });
+
+      if (!details.crossContractCalls) details.crossContractCalls = [];
+      details.crossContractCalls.push({
+        fromContract: targetContract,
+        toContract: inv.contractId,
+        functionName: inv.functionName,
+        success: true
+      });
+    };
+
+    for (const inv of authInvocations) {
+      processInvocation(inv);
+    }
+
+    // Process any Horizon asset_balance_changes
+    if (operation.asset_balance_changes && Array.isArray(operation.asset_balance_changes)) {
+      for (const change of operation.asset_balance_changes) {
+        if (change.type === 'transfer' && change.from && change.to) {
+          const alreadyCovered = synthesizedEvents.some(e =>
+            e.topics && e.topics[0] === 'transfer' &&
+            String(e.topics[1]) === String(change.from) &&
+            String(e.topics[2]) === String(change.to)
+          );
+          if (!alreadyCovered) {
+            const tokenContract = change.asset_type === 'native'
+              ? 'CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA'
+              : (change.contractId || targetContract);
+
+            synthesizedEvents.push({
+              contractId: tokenContract,
+              type: 'diagnostic',
+              topics: ['fn_call', tokenContract, 'transfer'],
+              data: [change.from, change.to, change.amount],
+              inSuccessfulContractCall: true
+            });
+            synthesizedEvents.push({
+              contractId: tokenContract,
+              type: 'contract',
+              topics: ['transfer', change.from, change.to],
+              data: change.amount,
+              inSuccessfulContractCall: true
+            });
+            synthesizedEvents.push({
+              contractId: tokenContract,
+              type: 'diagnostic',
+              topics: ['fn_return', 'transfer'],
+              data: 'void',
+              inSuccessfulContractCall: true
+            });
+          }
+        }
+      }
+    }
+
+    // Root function return
+    synthesizedEvents.push({
+      contractId: targetContract,
+      type: 'diagnostic',
+      topics: ['fn_return', details.functionName],
+      data: details.result !== undefined && details.result !== null ? details.result : 'void',
+      inSuccessfulContractCall: true
+    });
+
+    const existingContractEvents = details.events.filter((e: any) => {
+      const top = e.topics?.[0];
+      const topStr = typeof top === 'string' ? top : (decodeScVal(top) || '');
+      return topStr && topStr !== 'fn_call' && topStr !== 'fn_return';
+    });
+
+    details.events = [...synthesizedEvents, ...existingContractEvents];
+  }
+
+  // Populate stateChanges from asset_balance_changes if result_meta_xdr stateChanges were not present
+  if ((!details.stateChanges || details.stateChanges.length === 0) && operation.asset_balance_changes && Array.isArray(operation.asset_balance_changes)) {
+    details.stateChanges = operation.asset_balance_changes.map((change: any) => {
+      const assetLabel = change.asset_type === 'native' ? 'XLM' : change.asset_code || 'Asset';
+      const fromShort = change.from ? `${change.from.substring(0, 4)}…${change.from.substring(change.from.length - 4)}` : 'Account';
+      const toShort = change.to ? `${change.to.substring(0, 4)}…${change.to.substring(change.to.length - 4)}` : 'Contract';
+      return {
+        type: 'updated',
+        changeType: 'ledgerEntryUpdated',
+        ledgerEntryType: 'account',
+        keyDisplay: `${fromShort} Balance`,
+        beforeDisplay: '—',
+        afterDisplay: `-${change.amount} ${assetLabel}`,
+        description: `Transfer ${change.amount} ${assetLabel} from ${fromShort} to ${toShort}`
+      };
+    });
   }
 
   return details;

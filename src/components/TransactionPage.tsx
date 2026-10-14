@@ -220,7 +220,7 @@ export function TransactionPage({ networkConfig }: TransactionPageProps) {
                 <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
                   <h2 className="text-xl font-semibold mb-4">Operations Flow for Users</h2>
                   <UserOperationFlow
-                    events={selectedTransaction.sorobanOperations[0]?.events || []}
+                    events={selectedTransaction.sorobanOperations[0]?.events?.length ? selectedTransaction.sorobanOperations[0].events : (selectedTransaction.events || [])}
                     sourceAccount={selectedTransaction.sourceAccount}
                     functionName={selectedTransaction.sorobanOperations[0]?.functionName}
                     assetBalanceChanges={selectedTransaction.operations?.[0]?.asset_balance_changes || []}
