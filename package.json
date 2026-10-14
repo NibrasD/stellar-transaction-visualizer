@@ -41,7 +41,7 @@
     "build:sdk": "vite build --config vite.sdk.config.ts && tsc -p tsconfig.sdk.json",
     "build:web": "tsc -p tsconfig.app.json --noEmit && vite build",
     "type-check": "tsc -p tsconfig.app.json --noEmit",
-    "test": "vitest run",
+    "test": "npx vitest run --pool=forks",
     "lint": "eslint src/ --ext ts,tsx",
     "preview": "vite preview",
     "prepublishOnly": "npm run type-check && npm run lint && npm run test && npm run build:sdk"
