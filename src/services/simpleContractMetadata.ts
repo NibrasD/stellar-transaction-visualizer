@@ -1,5 +1,4 @@
 import { createClient } from '@supabase/supabase-js';
-import * as StellarSdk from '@stellar/stellar-sdk';
 
 const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL;
 const supabaseKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY;
@@ -31,6 +30,13 @@ export interface FunctionSpec {
   name: string;
   inputs: Array<{ name: string; type: string }>;
   outputs: Array<{ type: string }>;
+}
+
+export interface TypeDefinition {
+  name: string;
+  type?: string;
+  fields?: Array<{ name: string; type: string }>;
+  [key: string]: any;
 }
 
 export interface EventSpec {
@@ -65,7 +71,7 @@ export interface TokenMetadata {
 class SimpleContractMetadataService {
   private rpcUrl: string = '';
   private network: string = 'testnet';
-  private networkPassphrase: string = '';
+  protected networkPassphrase: string = '';
   private memoryCache: Map<string, ContractMetadata> = new Map();
 
   setNetwork(network: string, rpcUrl: string, networkPassphrase: string) {
@@ -90,17 +96,16 @@ class SimpleContractMetadataService {
         .maybeSingle();
 
       if (data && !error) {
-        const hasFunctions = data.functions && data.functions.length > 0;
-        const hasTokenMetadata = data.is_token && data.token_symbol;
+        const hasFunctions = Boolean(data.functions && data.functions.length > 0);
+        const hasTokenInfo = Boolean(data.is_token && data.token_symbol);
 
         // Skip cache if:
         // 1. No functions AND not marked as token
         // 2. Marked as token but missing symbol (incomplete token metadata)
         const isIncomplete = (!hasFunctions && !data.is_token) ||
-          (data.is_token && !data.token_symbol);
+          (data.is_token && !hasTokenInfo);
 
-        if (isIncomplete) {
-        } else {
+        if (!isIncomplete) {
           const metadata: ContractMetadata = {
             contractId: data.contract_id,
             network: data.network,
@@ -226,8 +231,8 @@ class SimpleContractMetadataService {
       if (hasTokenFunctions || !functions) {
         // Try calling symbol() function
         try {
-          tokenSymbol = await this.callContractFunction(null as any, contractId, 'symbol');
-          // Symbol normalization is now done in the edge function
+          const sym = await this.callContractFunction(null as any, contractId, 'symbol');
+          tokenSymbol = sym ?? undefined;
           if (tokenSymbol) {
             isToken = true; // If symbol() succeeds, it's a token
           }
@@ -237,7 +242,8 @@ class SimpleContractMetadataService {
         // Try calling name() function
         if (isToken || !functions) {
           try {
-            tokenName = await this.callContractFunction(null as any, contractId, 'name');
+            const nm = await this.callContractFunction(null as any, contractId, 'name');
+            tokenName = nm ?? undefined;
             if (tokenName) {
               isToken = true;
             }
@@ -289,7 +295,7 @@ class SimpleContractMetadataService {
     }
   }
 
-  private async fetchContractSpecFromRPC(server: StellarSdk.rpc.Server, contractId: string): Promise<{ functions: FunctionSpec[] | null; events: EventSpec[] | null }> {
+  private async fetchContractSpecFromRPC(_server: any, contractId: string): Promise<{ functions: FunctionSpec[] | null; events: EventSpec[] | null }> {
     try {
       if (!supabaseUrl) {
         return { functions: null, events: null };
@@ -319,7 +325,7 @@ class SimpleContractMetadataService {
     }
   }
 
-  private getTypeName(type: any): string {
+  protected getTypeName(type: any): string {
     const typeName = type.switch().name;
 
     switch (typeName) {
@@ -353,7 +359,7 @@ class SimpleContractMetadataService {
   }
 
   private async callContractFunction(
-    server: StellarSdk.rpc.Server,
+    _server: any,
     contractId: string,
     functionName: string
   ): Promise<string | null> {
@@ -400,23 +406,10 @@ class SimpleContractMetadataService {
     };
   }
 
-  private async saveContractToCache(metadata: ContractMetadata): Promise<void> {
-    if (!supabase) return;
-
-    try {
-      await supabase.from('contract_metadata').upsert({
-        contract_id: metadata.contractId,
-        network: metadata.network,
-        spec: metadata.spec,
-        functions: metadata.functions,
-        is_token: metadata.isToken,
-        token_name: metadata.tokenName,
-        token_symbol: metadata.tokenSymbol,
-        token_decimals: metadata.tokenDecimals,
-        updated_at: new Date().toISOString(),
-      });
-    } catch (error) {
-    }
+  private async saveContractToCache(_metadata: ContractMetadata): Promise<void> {
+    // Note: Caching in Supabase is handled securely server-side by the Edge Function
+    // using the service_role key to prevent client-side cache poisoning.
+    return;
   }
 
   getFunctionSpec(contractMetadata: ContractMetadata | null, functionName: string): FunctionSpec | null {
@@ -440,7 +433,6 @@ class SimpleContractMetadataService {
 
     const formattedArgs = args.map((arg, i) => {
       const paramName = spec.inputs[i]?.name || `arg${i}`;
-      const paramType = spec.inputs[i]?.type || 'unknown';
       return `${paramName}: ${arg}`;
     }).join(', ');
 

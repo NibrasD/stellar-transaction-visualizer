@@ -28,6 +28,7 @@ export interface OperationNode {
   type: string;
   data: any;
   position: { x: number; y: number };
+  [key: string]: any;
 }
 
 export interface OperationEdge {
@@ -85,6 +86,7 @@ export interface NetworkConfig {
   isTestnet: boolean;
   networkUrl: string;
   networkPassphrase: string;
+  rpcUrl?: string;
 }
 
 export interface SorobanOperation {
@@ -246,4 +248,7 @@ export interface TransactionEffect {
   bought_asset_type?: string;
   bought_asset_code?: string;
   bought_asset_issuer?: string;
+  balance_id?: string;
+  operation?: any;
+  [key: string]: any;
 }

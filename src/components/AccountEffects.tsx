@@ -39,6 +39,10 @@ interface AccountEffect {
   total_shares?: string;
   accounts?: string;
   reserves?: any[];
+  operationIndex?: number;
+  operationType?: string;
+  eventName?: string;
+  [key: string]: any;
 }
 
 export function AccountEffects({ details, sorobanOperations, contractMetadata }: AccountEffectsProps) {
@@ -457,6 +461,60 @@ export function AccountEffects({ details, sorobanOperations, contractMetadata }:
     return true;
   });
 
+  // Calculate aggregated summary for each account-asset pair (use filtered effects)
+  const aggregatedSummary = React.useMemo(() => {
+    const summaryMap = new Map<string, {
+      accountId: string;
+      asset: string;
+      assetCode?: string;
+      assetIssuer?: string;
+      contractId?: string;
+      credited: number;
+      debited: number;
+      minted: number;
+      burned: number;
+    }>();
+
+    balanceChangeEffects.forEach(effect => {
+      const key = `${effect.accountId}-${effect.assetCode || effect.asset}`;
+
+      if (!summaryMap.has(key)) {
+        summaryMap.set(key, {
+          accountId: effect.accountId,
+          asset: effect.asset,
+          assetCode: effect.assetCode,
+          assetIssuer: effect.assetIssuer,
+          contractId: effect.contractId,
+          credited: 0,
+          debited: 0,
+          minted: 0,
+          burned: 0
+        });
+      }
+
+      const summary = summaryMap.get(key)!;
+      const amount = parseFloat(effect.amount);
+
+      if (effect.type === 'credited') {
+        summary.credited += amount;
+      } else if (effect.type === 'debited') {
+        summary.debited += amount;
+      } else if (effect.type === 'minted') {
+        summary.minted += amount;
+      } else if (effect.type === 'burned') {
+        summary.burned += amount;
+      }
+    });
+
+    // Filter out entries where net amount is 0 (no actual change)
+    return Array.from(summaryMap.values()).filter(summary => {
+      const netCredit = summary.credited + summary.minted;
+      const netDebit = summary.debited + summary.burned;
+      const netAmount = netCredit - netDebit;
+      return netAmount !== 0;
+    });
+  }, [balanceChangeEffects]);
+
   if (balanceChangeEffects.length === 0) {
     return (
       <div className="bg-gray-50 border border-gray-200 rounded-lg p-8 text-center">
@@ -726,60 +784,6 @@ export function AccountEffects({ details, sorobanOperations, contractMetadata }:
       </div>
     );
   };
-
-  // Calculate aggregated summary for each account-asset pair (use filtered effects)
-  const aggregatedSummary = React.useMemo(() => {
-    const summaryMap = new Map<string, {
-      accountId: string;
-      asset: string;
-      assetCode?: string;
-      assetIssuer?: string;
-      contractId?: string;
-      credited: number;
-      debited: number;
-      minted: number;
-      burned: number;
-    }>();
-
-    balanceChangeEffects.forEach(effect => {
-      const key = `${effect.accountId}-${effect.assetCode || effect.asset}`;
-
-      if (!summaryMap.has(key)) {
-        summaryMap.set(key, {
-          accountId: effect.accountId,
-          asset: effect.asset,
-          assetCode: effect.assetCode,
-          assetIssuer: effect.assetIssuer,
-          contractId: effect.contractId,
-          credited: 0,
-          debited: 0,
-          minted: 0,
-          burned: 0
-        });
-      }
-
-      const summary = summaryMap.get(key)!;
-      const amount = parseFloat(effect.amount);
-
-      if (effect.type === 'credited') {
-        summary.credited += amount;
-      } else if (effect.type === 'debited') {
-        summary.debited += amount;
-      } else if (effect.type === 'minted') {
-        summary.minted += amount;
-      } else if (effect.type === 'burned') {
-        summary.burned += amount;
-      }
-    });
-
-    // Filter out entries where net amount is 0 (no actual change)
-    return Array.from(summaryMap.values()).filter(summary => {
-      const netCredit = summary.credited + summary.minted;
-      const netDebit = summary.debited + summary.burned;
-      const netAmount = netCredit - netDebit;
-      return netAmount !== 0;
-    });
-  }, [balanceChangeEffects]);
 
   const formatAmount = (amount: number) => {
     if (amount < 0.0001 && amount > 0) {

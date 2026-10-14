@@ -14,6 +14,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import { Handle, Position } from 'reactflow';
 import * as StellarSdk from '@stellar/stellar-sdk';
+import { Buffer } from 'buffer';
 import { simpleContractMetadataService, TypeDefinition } from '../services/simpleContractMetadata';
 import { decodeScVal } from '../services/stellar';
 import { CopyButton } from './CopyButton';
@@ -117,10 +118,10 @@ const decodeContractId = (value: any): string => {
 
       if (bytes.length === 32) {
         try {
-          return StellarSdk.StrKey.encodeContract(bytes);
+          return StellarSdk.StrKey.encodeContract(Buffer.from(bytes));
         } catch {
           try {
-            return StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+            return StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(bytes));
           } catch {
             return value;
           }
@@ -168,14 +169,14 @@ const decodeBase64Value = (value: any): { decoded: string; type: string } => {
 
       if (bytes.length === 32) {
         try {
-          const contractId = StellarSdk.StrKey.encodeContract(bytes);
+          const contractId = StellarSdk.StrKey.encodeContract(Buffer.from(bytes));
           if (contractId.startsWith('C') && contractId.length === 56) {
             return { decoded: contractId, type: 'contract' };
           }
         } catch { }
 
         try {
-          const publicKey = StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+          const publicKey = StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(bytes));
           if (publicKey.startsWith('G') && publicKey.length === 56) {
             return { decoded: publicKey, type: 'account' };
           }
@@ -262,7 +263,7 @@ const formatBufferValue = (bytes: Uint8Array): { display: string; full: string; 
   // If 32 bytes, try to decode as Stellar address
   if (bytes.length === 32) {
     try {
-      const contractId = StellarSdk.StrKey.encodeContract(bytes);
+      const contractId = StellarSdk.StrKey.encodeContract(Buffer.from(bytes));
       if (contractId.startsWith('C') && contractId.length === 56) {
         const shortAddr = `${contractId.substring(0, 4)}…${contractId.substring(contractId.length - 4)}`;
         return { display: shortAddr, full: contractId, type: 'contract' };
@@ -270,7 +271,7 @@ const formatBufferValue = (bytes: Uint8Array): { display: string; full: string; 
     } catch { }
 
     try {
-      const publicKey = StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+      const publicKey = StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(bytes));
       if (publicKey.startsWith('G') && publicKey.length === 56) {
         const shortAddr = `${publicKey.substring(0, 4)}…${publicKey.substring(publicKey.length - 4)}`;
         return { display: shortAddr, full: publicKey, type: 'account' };
@@ -453,7 +454,7 @@ const formatValueByType = (
       if ((typeDef.kind === 'enum' || typeDef.kind === 'union') && typeDef.variants) {
         // For enums, the value is usually a number or the variant name
         if (typeof value === 'number') {
-          const variant = typeDef.variants.find(v => v.value === value);
+          const variant = typeDef.variants.find((v: any) => v.value === value);
           return variant ? variant.name : String(value);
         }
         if (typeof value === 'string') {
@@ -2139,7 +2140,7 @@ function UserOperationFlowInner({ events, sourceAccount, functionName, assetBala
           }
 
           // Decode event topics and data
-          const decodedValues: Array<{ value: string, type: string }> = [];
+          const decodedValues: Array<{ value: string, type: string, raw?: string }> = [];
 
           topics.slice(1).forEach((topic: any, idx: number) => {
             // Topics can be already-decoded strings or base64-encoded values
@@ -2452,7 +2453,7 @@ function UserOperationFlowInner({ events, sourceAccount, functionName, assetBala
                 if (lowerEventType === 'burn' && sourceAccount && fromAddr && amount) {
                   // Capture the context lines
                   finalResultLines.push(`${amount} ${assetSymbol} burned`);
-                  finalResultLines.push(`Initiated by: ${formatAddress(sourceAccount)}`);
+                  finalResultLines.push(`Initiated by: ${formatAddress(sourceAccount || '')}`);
 
                   // Get the full raw address of the account whose tokens were debited
                   const fullFromAddr = accounts.find((a: any) => a.value === fromAddr)?.raw || '';
@@ -3009,6 +3010,7 @@ function UserOperationFlowInner({ events, sourceAccount, functionName, assetBala
         account: string;
         asset: string;
         assetSymbol: string;
+        contractAddr?: string;
         minted: bigint;
         burned: bigint;
         transferredIn: bigint;
@@ -3118,6 +3120,8 @@ function UserOperationFlowInner({ events, sourceAccount, functionName, assetBala
             const key = `${toAccount}-${contractAddr}`;
             const existing = balanceChanges.get(key) || {
               account: toAccount,
+              asset: '',
+              assetSymbol: '',
               contractAddr: contractAddr || 'Unknown',
               minted: BigInt(0),
               burned: BigInt(0),
@@ -3130,6 +3134,8 @@ function UserOperationFlowInner({ events, sourceAccount, functionName, assetBala
             const key = `${fromAccount}-${contractAddr}`;
             const existing = balanceChanges.get(key) || {
               account: fromAccount,
+              asset: '',
+              assetSymbol: '',
               contractAddr: contractAddr || 'Unknown',
               minted: BigInt(0),
               burned: BigInt(0),
@@ -3143,6 +3149,8 @@ function UserOperationFlowInner({ events, sourceAccount, functionName, assetBala
               const key = `${fromAccount}-${contractAddr}`;
               const existing = balanceChanges.get(key) || {
                 account: fromAccount,
+                asset: '',
+                assetSymbol: '',
                 contractAddr: contractAddr || 'Unknown',
                 minted: BigInt(0),
                 burned: BigInt(0),
@@ -3156,6 +3164,8 @@ function UserOperationFlowInner({ events, sourceAccount, functionName, assetBala
               const key = `${toAccount}-${contractAddr}`;
               const existing = balanceChanges.get(key) || {
                 account: toAccount,
+                asset: '',
+                assetSymbol: '',
                 contractAddr: contractAddr || 'Unknown',
                 minted: BigInt(0),
                 burned: BigInt(0),
@@ -3174,14 +3184,14 @@ function UserOperationFlowInner({ events, sourceAccount, functionName, assetBala
         const summaryId = 'aggregated-summary';
         const summaryContent: string[] = [];
 
-        balanceChanges.forEach((change, key) => {
+        balanceChanges.forEach((change, _key) => {
           const netCredits = change.minted + change.transferredIn;
           const netDebits = change.burned + change.transferredOut;
           const netChange = netCredits - netDebits;
 
           if (netChange !== BigInt(0)) {
             // Look up token symbol and decimals NOW (after all data is loaded)
-            const contractAddr = change.contractAddr;
+            const contractAddr = change.contractAddr || '';
             const metadata = metadataMap.get(contractAddr);
             let assetSymbol = metadata?.tokenSymbol || '';
             let decimals = metadata?.tokenDecimals;
@@ -3251,7 +3261,7 @@ function UserOperationFlowInner({ events, sourceAccount, functionName, assetBala
     return () => clearTimeout(timer);
   }, [nodes.length, fitView]);
 
-  const onConnect = useCallback((params: Connection) => {
+  const onConnect = useCallback((_params: Connection) => {
   }, []);
 
   return (

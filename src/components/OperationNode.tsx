@@ -3,6 +3,7 @@ import { Handle, Position } from 'reactflow';
 import { CircleDollarSign, ArrowRightCircle, AlertCircle, Code, Cpu, Zap, UserPlus, Settings, TrendingUp, Shield, Key, Users, ArrowLeftRight, Target, Repeat, ShoppingCart, ArrowRight, Sprout, Wheat, Copy, Check } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import * as StellarSdk from '@stellar/stellar-sdk';
+import { Buffer } from 'buffer';
 import { formatContractValue, simpleContractMetadataService } from '../services/stellar';
 import { PathPaymentNode } from './PathPaymentNode';
 
@@ -19,11 +20,11 @@ const safeStringify = (value: any, space?: number): string => {
       const bytes = new Uint8Array(val.data);
       if (bytes.length === 32) {
         try {
-          const contractId = StellarSdk.StrKey.encodeContract(bytes);
+          const contractId = StellarSdk.StrKey.encodeContract(Buffer.from(bytes));
           return `${contractId.substring(0, 4)}…${contractId.substring(contractId.length - 4)}`;
         } catch { }
         try {
-          const publicKey = StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+          const publicKey = StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(bytes));
           return `${publicKey.substring(0, 4)}…${publicKey.substring(publicKey.length - 4)}`;
         } catch { }
       }
@@ -50,11 +51,11 @@ const safeStringify = (value: any, space?: number): string => {
           numericKeys.forEach((k, i) => { bytes[i] = val[k]; });
           if (bytes.length === 32) {
             try {
-              const contractId = StellarSdk.StrKey.encodeContract(bytes);
+              const contractId = StellarSdk.StrKey.encodeContract(Buffer.from(bytes));
               return `${contractId.substring(0, 4)}…${contractId.substring(contractId.length - 4)}`;
             } catch { }
             try {
-              const publicKey = StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+              const publicKey = StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(bytes));
               return `${publicKey.substring(0, 4)}…${publicKey.substring(publicKey.length - 4)}`;
             } catch { }
           }
@@ -276,7 +277,7 @@ const formatBufferValue = (bytes: Uint8Array): { display: string; full: string; 
   // If 32 bytes, try to decode as Stellar address
   if (bytes.length === 32) {
     try {
-      const contractId = StellarSdk.StrKey.encodeContract(bytes);
+      const contractId = StellarSdk.StrKey.encodeContract(Buffer.from(bytes));
       if (contractId.startsWith('C') && contractId.length === 56) {
         const shortAddr = `${contractId.substring(0, 4)}…${contractId.substring(contractId.length - 4)}`;
         return { display: shortAddr, full: contractId, type: 'contract' };
@@ -284,7 +285,7 @@ const formatBufferValue = (bytes: Uint8Array): { display: string; full: string; 
     } catch { }
 
     try {
-      const publicKey = StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+      const publicKey = StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(bytes));
       if (publicKey.startsWith('G') && publicKey.length === 56) {
         const shortAddr = `${publicKey.substring(0, 4)}…${publicKey.substring(publicKey.length - 4)}`;
         return { display: shortAddr, full: publicKey, type: 'account' };
@@ -893,7 +894,7 @@ const describeEvent = (event: any): string => {
     : 'Event';
 
   // Build parameter list from topics (skip first which is event name)
-  const topicParams = topics.slice(1).map((topic, idx) => {
+  const topicParams = topics.slice(1).map((topic: any, _idx: number) => {
     const formatted = formatValue(topic);
     return formatted && formatted !== '[data]' ? `${formatted}` : null;
   }).filter(Boolean);
@@ -1006,6 +1007,7 @@ interface OperationNodeProps {
     };
     stateChanges?: any[];
     ttlExtensions?: any[];
+    [key: string]: any;
   };
 }
 
@@ -1237,6 +1239,21 @@ export function OperationNodeComponent({ data }: OperationNodeProps) {
   };
 
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
+  const [contractLabel, setContractLabel] = useState<string | null>(null);
+  const [contractFullDisplay, setContractFullDisplay] = useState<string>(
+    data.contractId || 'Unknown'
+  );
+
+  useEffect(() => {
+    if (data.contractId && data.contractId.startsWith('C')) {
+      simpleContractMetadataService.getContractLabel(data.contractId).then(label => {
+        setContractLabel(label);
+        if (label && !label.includes('…')) {
+          setContractFullDisplay(`${label} (${data.contractId})`);
+        }
+      });
+    }
+  }, [data.contractId]);
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text).then(() => {
@@ -1332,24 +1349,6 @@ export function OperationNodeComponent({ data }: OperationNodeProps) {
             ? formatAccountId(data.sourceAccount)
             : 'Unknown';
         const func = functionName || 'unknown';
-
-        // Fetch contract label (token symbol or shortened ID)
-        const [contractLabel, setContractLabel] = useState<string | null>(null);
-        const [contractFullDisplay, setContractFullDisplay] = useState<string>(
-          data.contractId || 'Unknown'
-        );
-
-        useEffect(() => {
-          if (data.contractId && data.contractId.startsWith('C')) {
-            simpleContractMetadataService.getContractLabel(data.contractId).then(label => {
-              setContractLabel(label);
-              // If we got a token symbol (not a shortened ID), show it more prominently
-              if (label && !label.includes('…')) {
-                setContractFullDisplay(`${label} (${data.contractId})`);
-              }
-            });
-          }
-        }, [data.contractId]);
 
         const contract = contractLabel || formatAccountId(data.contractId || '');
 
@@ -1608,7 +1607,7 @@ export function OperationNodeComponent({ data }: OperationNodeProps) {
 
                               // Build JSON structure
                               const fnCallTopics = [functionName, cleanSymSuffix(formatValueWithType(callerAddress, 80, argContractMetadata))];
-                              const fnCallData = args.map(a => cleanSymSuffix(formatValueWithType(a, 80, argContractMetadata)));
+                              const fnCallData = args.map((a: any) => cleanSymSuffix(formatValueWithType(a, 80, argContractMetadata)));
 
                               return (
                                 <div key={idx} className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-lg shadow-lg border-2 border-cyan-500/30 p-3">
@@ -1630,7 +1629,7 @@ export function OperationNodeComponent({ data }: OperationNodeProps) {
                                         <div className="ml-3">
                                           <div className="text-pink-400">"topics"<span className="text-slate-400">: [</span></div>
                                           <div className="ml-3 space-y-0.5">
-                                            {fnCallTopics.map((topic, i) => (
+                                            {fnCallTopics.map((topic: any, i: number) => (
                                               <div key={i} className="text-emerald-300">
                                                 "{topic}"{i < fnCallTopics.length - 1 ? ',' : ''}
                                               </div>
@@ -1643,7 +1642,7 @@ export function OperationNodeComponent({ data }: OperationNodeProps) {
                                         <div className="ml-3">
                                           <div className="text-pink-400">"data"<span className="text-slate-400">: [</span></div>
                                           <div className="ml-3 space-y-0.5">
-                                            {fnCallData.map((dataItem, i) => (
+                                            {fnCallData.map((dataItem: any, i: number) => (
                                               <div key={i} className="text-yellow-300">
                                                 "{dataItem}"{i < fnCallData.length - 1 ? ',' : ''}
                                               </div>

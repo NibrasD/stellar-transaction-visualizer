@@ -1,7 +1,7 @@
 {
   "name": "@nibrasd/transaction-visualizer",
   "description": "Stellar Transaction Visualizer SDK - analyze classic and Soroban transactions, with contract simulator and debug info",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "keywords": [
     "stellar",
     "soroban",
@@ -15,31 +15,33 @@
   "author": "Nibras D",
   "license": "MIT",
   "type": "module",
-  "main": "dist/sdk/index.js",
+  "main": "dist/sdk/index.cjs",
+  "module": "dist/sdk/index.js",
   "types": "dist/sdk/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/sdk/index.d.ts",
       "import": "./dist/sdk/index.js",
-      "types": "./dist/sdk/index.d.ts"
+      "require": "./dist/sdk/index.cjs"
     }
   },
   "files": [
     "dist/sdk",
-    "dist/services",
-    "dist/types",
     "README.md",
     "CHANGELOG.md",
+    "LICENSE",
     "examples"
   ],
   "scripts": {
     "dev": "vite",
-    "build": "npm run build:sdk && tsc && vite build && npm run build:vertex",
-    "build:sdk": "tsc -p tsconfig.sdk.json",
-    "build:web": "tsc && vite build",
-    "build:vertex": "cd vertex && npm install && npm run build && cd .. && mkdir -p dist/vertex && cp -r vertex/dist/* dist/vertex/",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "build": "npm run build:sdk && vite build",
+    "build:sdk": "vite build --config vite.sdk.config.ts && tsc -p tsconfig.sdk.json",
+    "build:web": "tsc -p tsconfig.app.json --noEmit && vite build",
+    "type-check": "tsc -p tsconfig.app.json --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src/ --ext ts,tsx",
     "preview": "vite preview",
-    "prepublishOnly": "npm run build:sdk"
+    "prepublishOnly": "npm run type-check && npm run lint && npm run test && npm run build:sdk"
   },
   "dependencies": {
     "@radix-ui/react-switch": "^1.0.3",
@@ -51,8 +53,7 @@
     "react": ">=16.8.0",
     "react-dom": ">=16.8.0",
     "react-router-dom": "^7.13.2",
-    "reactflow": "^11.10.4",
-    "soroban-client": "^1.0.0"
+    "reactflow": "^11.10.4"
   },
   "peerDependencies": {
     "react": ">=16.8.0",

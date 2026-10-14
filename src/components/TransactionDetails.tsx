@@ -2,6 +2,7 @@ import React from 'react';
 import { ExternalLink, AlertTriangle, CheckCircle, XCircle, Info, Code, Eye, ChevronDown, ChevronRight, Copy } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import * as StellarSdk from '@stellar/stellar-sdk';
+import { Buffer } from 'buffer';
 import type { TransactionDetails } from '../types/stellar';
 import { formatContractValue } from '../services/stellar';
 import { PathPaymentNode } from './PathPaymentNode';
@@ -62,11 +63,11 @@ const formatValueWithType = (val: any, maxLength: number = 60): string => {
     const bytes = serializedBufferToUint8Array(val);
     if (bytes.length === 32) {
       try {
-        const addr = StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+        const addr = StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(bytes));
         return `${addr.substring(0, 4)}…${addr.substring(addr.length - 4)}`;
       } catch {
         try {
-          const addr = StellarSdk.StrKey.encodeContract(bytes);
+          const addr = StellarSdk.StrKey.encodeContract(Buffer.from(bytes));
           return `${addr.substring(0, 4)}…${addr.substring(addr.length - 4)}`;
         } catch {
           const hex = Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join('');
@@ -175,10 +176,10 @@ function decodeValue(val: any): string {
           const bytes = new Uint8Array(arr);
           // Try contract address first (C...)
           try {
-            return StellarSdk.StrKey.encodeContract(bytes);
+            return StellarSdk.StrKey.encodeContract(Buffer.from(bytes));
           } catch {
             try {
-              return StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+              return StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(bytes));
             } catch {
               // Show as hex if not an address
               const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -322,6 +323,164 @@ function formatBalanceId(balanceId: string): string {
   return balanceId.replace(/^0+/, '');
 }
 
+function OperationRelatedEffects({ effects, isPathPayment }: { effects: any[]; isPathPayment: boolean }) {
+  const [showAllEffects, setShowAllEffects] = React.useState(false);
+  const shouldCollapse = effects.length > 3;
+  const displayedEffects = shouldCollapse && !showAllEffects ? effects.slice(0, 3) : effects;
+
+  const getEffectBadgeColor = (type: string) => {
+    if (type.includes('credited') || type.includes('created') || type === 'claimable_balance_claimed') return 'bg-green-100 text-green-800 border-green-300';
+    if (type.includes('debited') || type.includes('removed')) return 'bg-red-100 text-red-800 border-red-300';
+    if (type.includes('updated')) return 'bg-blue-100 text-blue-800 border-blue-300';
+    if (type.includes('sponsorship')) return 'bg-orange-100 text-orange-800 border-orange-300';
+    if (type.includes('trade')) return 'bg-purple-100 text-purple-800 border-purple-300';
+    return 'bg-gray-100 text-gray-800 border-gray-300';
+  };
+
+  const formatEffectDescription = (eff: any) => {
+    switch (eff.type) {
+      case 'trustline_created':
+        return `Trustline created for ${eff.asset_code} (limit: ${parseFloat(eff.limit || '0').toLocaleString()})`;
+      case 'trustline_removed':
+        return `Trustline removed for ${eff.asset_code}`;
+      case 'trustline_updated':
+        return `Trustline updated for ${eff.asset_code} (limit: ${parseFloat(eff.limit || '0').toLocaleString()})`;
+      case 'claimable_balance_claimed':
+        return (
+          <span>Claimed by <CopyableAddress address={eff.account} className="font-mono" /></span>
+        );
+      case 'account_credited':
+        const creditAsset = eff.asset_code || 'XLM';
+        return (
+          <span>
+            {eff.amount} {creditAsset}
+            {eff.asset_issuer && (
+              <>(<CopyableAddress address={eff.asset_issuer} className="font-mono" />)</>
+            )} credited to <CopyableAddress address={eff.account} className="font-mono" />
+          </span>
+        );
+      case 'account_debited':
+        const debitAsset = eff.asset_code || 'XLM';
+        return (
+          <span>
+            {eff.amount} {debitAsset}
+            {eff.asset_issuer && (
+              <>(<CopyableAddress address={eff.asset_issuer} className="font-mono" />)</>
+            )} debited from <CopyableAddress address={eff.account} className="font-mono" />
+          </span>
+        );
+      case 'claimable_balance_sponsorship_removed':
+        return (
+          <span>Sponsorship revoked by <CopyableAddress address={eff.former_sponsor} className="font-mono" /></span>
+        );
+      case 'trade':
+        return `Trade executed`;
+      case 'account_created':
+        return (
+          <span>Account created: <CopyableAddress address={eff.account} className="font-mono" /> with {(eff as any).starting_balance} XLM</span>
+        );
+      case 'data_created':
+        return (
+          <span>Account <CopyableAddress address={(eff as any).account} className="font-mono" /> created data entry "{(eff as any).name}" = "{(eff as any).value}"</span>
+        );
+      case 'data_updated':
+        return (
+          <span>Account <CopyableAddress address={(eff as any).account} className="font-mono" /> updated data entry "{(eff as any).name}" = "{(eff as any).value}"</span>
+        );
+      case 'data_removed':
+        return (
+          <span>Account <CopyableAddress address={(eff as any).account} className="font-mono" /> removed data entry "{(eff as any).name}"</span>
+        );
+      case 'account_sponsorship_created':
+      case 'account_sponsorship_updated':
+        return (
+          <span>Account <CopyableAddress address={(eff as any).sponsor} className="font-mono" /> sponsored account base reserve for <CopyableAddress address={(eff as any).account} className="font-mono" /></span>
+        );
+      case 'data_sponsorship_created':
+      case 'data_sponsorship_updated':
+        return (
+          <span>Account <CopyableAddress address={(eff as any).sponsor} className="font-mono" /> sponsored "{(eff as any).data_name}" data reserve for <CopyableAddress address={(eff as any).account} className="font-mono" /></span>
+        );
+      case 'signer_sponsorship_created':
+      case 'signer_sponsorship_updated':
+        return (
+          <span>Account <CopyableAddress address={(eff as any).sponsor} className="font-mono" /> sponsored signer for <CopyableAddress address={(eff as any).account} className="font-mono" /></span>
+        );
+      case 'trustline_sponsorship_created':
+      case 'trustline_sponsorship_updated':
+        return (
+          <span>Account <CopyableAddress address={(eff as any).sponsor} className="font-mono" /> sponsored trustline for <CopyableAddress address={(eff as any).account} className="font-mono" /></span>
+        );
+      case 'claimable_balance_sponsorship_created':
+      case 'claimable_balance_sponsorship_updated':
+        return (
+          <span>Account <CopyableAddress address={(eff as any).sponsor} className="font-mono" /> sponsored claimable balance for {(eff as any).balance_id}</span>
+        );
+      default:
+        return eff.type.replace(/_/g, ' ');
+    }
+  };
+
+  return (
+    <div className="mt-4 pt-4 border-t border-gray-200">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+          📋 Related Effects ({effects.length})
+        </p>
+        {shouldCollapse && (
+          <button
+            onClick={() => setShowAllEffects(!showAllEffects)}
+            className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+          >
+            {showAllEffects ? 'Show less' : `Show all ${effects.length}`}
+          </button>
+        )}
+      </div>
+      <div className="space-y-2">
+        {displayedEffects.map((effect: any, effIdx: number) => {
+          const isMainDebitCredit = isPathPayment && (effect.type === 'account_debited' || effect.type === 'account_credited');
+
+          if (isMainDebitCredit) {
+            const isDebit = effect.type === 'account_debited';
+            const label = isDebit ? 'Account Debited (Source)' : 'Account Credited (Destination)';
+            const bgColor = isDebit ? 'bg-red-50/70' : 'bg-green-50/70';
+            const borderColor = isDebit ? 'border-red-400' : 'border-green-400';
+            const textColor = isDebit ? 'text-red-700' : 'text-green-700';
+            const descColor = isDebit ? 'text-red-800' : 'text-green-800';
+
+            return (
+              <div key={effIdx} className={`${bgColor} border-l-4 ${borderColor} rounded-r p-3 text-xs`}>
+                <div className="flex flex-col gap-1">
+                  <span className={`font-semibold ${textColor}`}>{label}</span>
+                  <p className={`${descColor}`}>
+                    {formatEffectDescription(effect)}
+                  </p>
+                </div>
+              </div>
+            );
+          }
+
+          return (
+            <div key={effIdx} className="bg-white border border-gray-200 rounded p-3 text-xs">
+              <div className="flex items-start gap-2">
+                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border whitespace-nowrap flex-shrink-0 ${getEffectBadgeColor(effect.type)}`} style={{ fontSize: '0.7rem' }}>
+                  {getEffectBadgeColor(effect.type).includes('green') && '✓ '}
+                  {getEffectBadgeColor(effect.type).includes('red') && '✗ '}
+                  {getEffectBadgeColor(effect.type).includes('orange') && '🔓 '}
+                  {effect.type.replace(/_/g, ' ').toUpperCase()}
+                </span>
+                <p className="text-gray-700 flex-1 min-w-0">
+                  {formatEffectDescription(effect)}
+                </p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function TransactionDetailsPanel({ transaction, networkConfig }: TransactionDetailsProps) {
   const [showDebugInfo, setShowDebugInfo] = React.useState(false);
   const [isDebugInfoExpanded, setIsDebugInfoExpanded] = React.useState(false);
@@ -333,7 +492,8 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
 
   // Group effects by operation - sequential with asset matching
   const groupEffectsByOperation = React.useMemo(() => {
-    if (!transaction.effects || !transaction.operations) return {};
+    const effects = transaction.effects;
+    if (!effects || !transaction.operations) return {};
 
     const effectsByOp: Record<number, any[]> = {};
     let effectIdx = 0; // Sequential pointer
@@ -355,8 +515,8 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
           ? ['trustline_removed']
           : ['trustline_created', 'trustline_updated'];
 
-        for (let i = effectIdx; i < transaction.effects.length; i++) {
-          const effect = transaction.effects[i];
+        for (let i = effectIdx; i < effects.length; i++) {
+          const effect = effects[i];
           if (expectedTypes.includes(effect.type) &&
               effect.account === opAccount &&
               effect.asset_code === assetCode &&
@@ -377,8 +537,8 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
         let foundClaim = false;
         let foundCredit = false;
 
-        for (let i = effectIdx; i < transaction.effects.length; i++) {
-          const effect = transaction.effects[i];
+        for (let i = effectIdx; i < effects.length; i++) {
+          const effect = effects[i];
 
           // Match claimed effect
           if (!foundClaim && effect.type === 'claimable_balance_claimed' && effect.balance_id === balanceId) {
@@ -444,8 +604,8 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
 
         const startIdx = effectIdx;
 
-        for (let i = startIdx; i < transaction.effects.length; i++) {
-          const effect = transaction.effects[i];
+        for (let i = startIdx; i < effects.length; i++) {
+          const effect = effects[i];
 
           // Match debit of source asset from source account
           if (!foundDebit && effect.type === 'account_debited' &&
@@ -492,8 +652,8 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
         const to = opAny.to || opAny.destination;
         const amount = opAny.amount;
 
-        for (let i = effectIdx; i < transaction.effects.length; i++) {
-          const effect = transaction.effects[i];
+        for (let i = effectIdx; i < effects.length; i++) {
+          const effect = effects[i];
           if ((effect.type === 'account_debited' && effect.account === from && effect.amount === amount) ||
               (effect.type === 'account_credited' && effect.account === to && effect.amount === amount)) {
             effectsByOp[opIdx].push({ ...effect, effectIndex: i });
@@ -507,8 +667,8 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
         const source = extractAccountAddress(op.source_account || transaction.sourceAccount);
 
         // Collect all related effects
-        for (let i = effectIdx; i < transaction.effects.length; i++) {
-          const effect = transaction.effects[i];
+        for (let i = effectIdx; i < effects.length; i++) {
+          const effect = effects[i];
           if ((effect.type === 'account_created' && effect.account === account) ||
               (effect.type === 'account_debited' && effect.account === source && effect.asset_type === 'native') ||
               (effect.type === 'account_credited' && effect.account === account && effect.asset_type === 'native') ||
@@ -526,8 +686,8 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
         const source = extractAccountAddress(op.source_account || transaction.sourceAccount);
         let balanceId = '';
 
-        for (let i = effectIdx; i < transaction.effects.length; i++) {
-          const effect = transaction.effects[i];
+        for (let i = effectIdx; i < effects.length; i++) {
+          const effect = effects[i];
           if ((effect.type === 'claimable_balance_created' || effect.type === 'claimable_balance_claimant_created') &&
               effect.amount === opAmount) {
             if (effect.type === 'claimable_balance_created') {
@@ -550,8 +710,8 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
         const name = opAny.name;
         const source = extractAccountAddress(op.source_account || transaction.sourceAccount);
 
-        for (let i = effectIdx; i < transaction.effects.length; i++) {
-          const effect = transaction.effects[i];
+        for (let i = effectIdx; i < effects.length; i++) {
+          const effect = effects[i];
           if ((effect.type === 'data_created' || effect.type === 'data_updated' || effect.type === 'data_removed') &&
               (effect as any).name === name) {
             effectsByOp[opIdx].push({ ...effect, effectIndex: i });
@@ -566,8 +726,8 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
         }
       } else if (op.type === 'manage_sell_offer' || op.type === 'manage_buy_offer') {
         // Collect offer effects (offer_created, offer_updated, offer_removed)
-        for (let i = effectIdx; i < transaction.effects.length; i++) {
-          const effect = transaction.effects[i];
+        for (let i = effectIdx; i < effects.length; i++) {
+          const effect = effects[i];
           if (effect.type === 'offer_created' || effect.type === 'offer_updated' || effect.type === 'offer_removed') {
             effectsByOp[opIdx].push({ ...effect, effectIndex: i });
             effectIdx = i + 1;
@@ -578,8 +738,8 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
         // Collect signer effects and sponsorship effects
         const source = extractAccountAddress(op.source_account || transaction.sourceAccount);
 
-        for (let i = effectIdx; i < transaction.effects.length; i++) {
-          const effect = transaction.effects[i];
+        for (let i = effectIdx; i < effects.length; i++) {
+          const effect = effects[i];
           if ((effect.type === 'signer_created' || effect.type === 'signer_updated' || effect.type === 'signer_removed') &&
               effect.account === source) {
             effectsByOp[opIdx].push({ ...effect, effectIndex: i });
@@ -628,7 +788,16 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
     } : null;
 
     // Show simple operation errors from result_codes first
-    const opErrors = (transaction.operationErrors || transaction.resultCodes?.operations || []).map((error, index) => ({
+    const opErrors: Array<{
+      title: string;
+      description: string;
+      solution: string;
+      code: string;
+      xdrDetails?: {
+        description?: string;
+        details?: any;
+      };
+    }> = (transaction.operationErrors || transaction.resultCodes?.operations || []).map((error, index) => ({
       title: `Operation ${index + 1} Error`,
       description: getSimpleErrorDescription(error),
       solution: getErrorSolution(error),
@@ -1534,7 +1703,7 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
                             {creditEffect.amount} {creditEffect.asset_type === 'native' ? 'XLM' : creditEffect.asset_code}
                           </span></p>
                           <p className="text-xs text-green-600 mt-1">
-                            Credited to <CopyableAddress address={creditEffect.account} className="font-mono" />
+                            Credited to <CopyableAddress address={creditEffect.account || ''} className="font-mono" />
                           </p>
                           {creditEffect.asset_type !== 'native' && creditEffect.asset_issuer && (
                             <p className="text-xs text-green-600 mt-1">
@@ -1548,7 +1717,7 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
                         <div className="bg-orange-50 p-3 rounded border-l-4 border-orange-500">
                           <p className="text-xs text-orange-700 font-semibold mb-1">🔓 Sponsorship Revoked</p>
                           <p className="text-xs text-orange-900">
-                            Former sponsor: <CopyableAddress address={sponsorshipEffect.former_sponsor} className="font-mono" />
+                            Former sponsor: <CopyableAddress address={sponsorshipEffect.former_sponsor || ''} className="font-mono" />
                           </p>
                         </div>
                       )}
@@ -1751,171 +1920,12 @@ export function TransactionDetailsPanel({ transaction, networkConfig }: Transact
                 )}
 
                 {/* Display related effects for this operation */}
-                {groupEffectsByOperation[index] && groupEffectsByOperation[index].length > 0 && (() => {
-                  const effects = groupEffectsByOperation[index];
-                  const [showAllEffects, setShowAllEffects] = React.useState(false);
-                  const shouldCollapse = effects.length > 3;
-                  const displayedEffects = shouldCollapse && !showAllEffects ? effects.slice(0, 3) : effects;
-
-                  // Check if this is a path payment operation
-                  const isPathPayment = op.type === 'path_payment_strict_send' || op.type === 'path_payment_strict_receive';
-
-                  return (
-                    <div className="mt-4 pt-4 border-t border-gray-200">
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
-                          📋 Related Effects ({effects.length})
-                        </p>
-                        {shouldCollapse && (
-                          <button
-                            onClick={() => setShowAllEffects(!showAllEffects)}
-                            className="text-xs text-blue-600 hover:text-blue-800 font-medium"
-                          >
-                            {showAllEffects ? 'Show less' : `Show all ${effects.length}`}
-                          </button>
-                        )}
-                      </div>
-                      <div className="space-y-2">
-                        {displayedEffects.map((effect: any, effIdx: number) => {
-                          const getEffectBadgeColor = (type: string) => {
-                            if (type.includes('credited') || type.includes('created') || type === 'claimable_balance_claimed') return 'bg-green-100 text-green-800 border-green-300';
-                            if (type.includes('debited') || type.includes('removed')) return 'bg-red-100 text-red-800 border-red-300';
-                            if (type.includes('updated')) return 'bg-blue-100 text-blue-800 border-blue-300';
-                            if (type.includes('sponsorship')) return 'bg-orange-100 text-orange-800 border-orange-300';
-                            if (type.includes('trade')) return 'bg-purple-100 text-purple-800 border-purple-300';
-                            return 'bg-gray-100 text-gray-800 border-gray-300';
-                          };
-
-                          // For path payments, style debited/credited effects more prominently
-                          const isMainDebitCredit = isPathPayment && (effect.type === 'account_debited' || effect.type === 'account_credited');
-
-                          const formatEffectDescription = (eff: any) => {
-                            const shortenAddr = (addr: string) => addr ? `${addr.substring(0, 6)}…${addr.substring(addr.length - 4)}` : '';
-
-                            switch (eff.type) {
-                              case 'trustline_created':
-                                return `Trustline created for ${eff.asset_code} (limit: ${parseFloat(eff.limit || '0').toLocaleString()})`;
-                              case 'trustline_removed':
-                                return `Trustline removed for ${eff.asset_code}`;
-                              case 'trustline_updated':
-                                return `Trustline updated for ${eff.asset_code} (limit: ${parseFloat(eff.limit || '0').toLocaleString()})`;
-                              case 'claimable_balance_claimed':
-                                return (
-                                  <span>Claimed by <CopyableAddress address={eff.account} className="font-mono" /></span>
-                                );
-                              case 'account_credited':
-                                const creditAsset = eff.asset_code || 'XLM';
-                                return (
-                                  <span>
-                                    {eff.amount} {creditAsset}
-                                    {eff.asset_issuer && (
-                                      <>(<CopyableAddress address={eff.asset_issuer} className="font-mono" />)</>
-                                    )} credited to <CopyableAddress address={eff.account} className="font-mono" />
-                                  </span>
-                                );
-                              case 'account_debited':
-                                const debitAsset = eff.asset_code || 'XLM';
-                                return (
-                                  <span>
-                                    {eff.amount} {debitAsset}
-                                    {eff.asset_issuer && (
-                                      <>(<CopyableAddress address={eff.asset_issuer} className="font-mono" />)</>
-                                    )} debited from <CopyableAddress address={eff.account} className="font-mono" />
-                                  </span>
-                                );
-                              case 'claimable_balance_sponsorship_removed':
-                                return (
-                                  <span>Sponsorship revoked by <CopyableAddress address={eff.former_sponsor} className="font-mono" /></span>
-                                );
-                              case 'trade':
-                                return `Trade executed`;
-                              case 'account_created':
-                                return (
-                                  <span>Account created: <CopyableAddress address={eff.account} className="font-mono" /> with {(eff as any).starting_balance} XLM</span>
-                                );
-                              case 'data_created':
-                                return (
-                                  <span>Account <CopyableAddress address={(eff as any).account} className="font-mono" /> created data entry "{(eff as any).name}" = "{(eff as any).value}"</span>
-                                );
-                              case 'data_updated':
-                                return (
-                                  <span>Account <CopyableAddress address={(eff as any).account} className="font-mono" /> updated data entry "{(eff as any).name}" = "{(eff as any).value}"</span>
-                                );
-                              case 'data_removed':
-                                return (
-                                  <span>Account <CopyableAddress address={(eff as any).account} className="font-mono" /> removed data entry "{(eff as any).name}"</span>
-                                );
-                              case 'account_sponsorship_created':
-                              case 'account_sponsorship_updated':
-                                return (
-                                  <span>Account <CopyableAddress address={(eff as any).sponsor} className="font-mono" /> sponsored account base reserve for <CopyableAddress address={(eff as any).account} className="font-mono" /></span>
-                                );
-                              case 'data_sponsorship_created':
-                              case 'data_sponsorship_updated':
-                                return (
-                                  <span>Account <CopyableAddress address={(eff as any).sponsor} className="font-mono" /> sponsored "{(eff as any).data_name}" data reserve for <CopyableAddress address={(eff as any).account} className="font-mono" /></span>
-                                );
-                              case 'signer_sponsorship_created':
-                              case 'signer_sponsorship_updated':
-                                return (
-                                  <span>Account <CopyableAddress address={(eff as any).sponsor} className="font-mono" /> sponsored signer for <CopyableAddress address={(eff as any).account} className="font-mono" /></span>
-                                );
-                              case 'trustline_sponsorship_created':
-                              case 'trustline_sponsorship_updated':
-                                return (
-                                  <span>Account <CopyableAddress address={(eff as any).sponsor} className="font-mono" /> sponsored trustline for <CopyableAddress address={(eff as any).account} className="font-mono" /></span>
-                                );
-                              case 'claimable_balance_sponsorship_created':
-                              case 'claimable_balance_sponsorship_updated':
-                                return (
-                                  <span>Account <CopyableAddress address={(eff as any).sponsor} className="font-mono" /> sponsored claimable balance for {(eff as any).balance_id}</span>
-                                );
-                              default:
-                                return eff.type.replace(/_/g, ' ');
-                            }
-                          };
-
-                          // Apply special styling for main debit/credit in path payments
-                          if (isMainDebitCredit) {
-                            const isDebit = effect.type === 'account_debited';
-                            const label = isDebit ? 'Account Debited (Source)' : 'Account Credited (Destination)';
-                            const bgColor = isDebit ? 'bg-red-50/70' : 'bg-green-50/70';
-                            const borderColor = isDebit ? 'border-red-400' : 'border-green-400';
-                            const textColor = isDebit ? 'text-red-700' : 'text-green-700';
-                            const descColor = isDebit ? 'text-red-800' : 'text-green-800';
-
-                            return (
-                              <div key={effIdx} className={`${bgColor} border-l-4 ${borderColor} rounded-r p-3 text-xs`}>
-                                <div className="flex flex-col gap-1">
-                                  <span className={`font-semibold ${textColor}`}>{label}</span>
-                                  <p className={`${descColor}`}>
-                                    {formatEffectDescription(effect)}
-                                  </p>
-                                </div>
-                              </div>
-                            );
-                          }
-
-                          return (
-                            <div key={effIdx} className="bg-white border border-gray-200 rounded p-3 text-xs">
-                              <div className="flex items-start gap-2">
-                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border whitespace-nowrap flex-shrink-0 ${getEffectBadgeColor(effect.type)}`} style={{ fontSize: '0.7rem' }}>
-                                  {getEffectBadgeColor(effect.type).includes('green') && '✓ '}
-                                  {getEffectBadgeColor(effect.type).includes('red') && '✗ '}
-                                  {getEffectBadgeColor(effect.type).includes('orange') && '🔓 '}
-                                  {effect.type.replace(/_/g, ' ').toUpperCase()}
-                                </span>
-                                <p className="text-gray-700 flex-1 min-w-0">
-                                  {formatEffectDescription(effect)}
-                                </p>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })()}
+                {groupEffectsByOperation[index] && groupEffectsByOperation[index].length > 0 && (
+                  <OperationRelatedEffects
+                    effects={groupEffectsByOperation[index]}
+                    isPathPayment={op.type === 'path_payment_strict_send' || op.type === 'path_payment_strict_receive'}
+                  />
+                )}
               </div>
             ))}
           </div>

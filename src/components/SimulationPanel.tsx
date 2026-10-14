@@ -57,7 +57,8 @@ export function SimulationPanel({ result }: SimulationPanelProps) {
                     {result.enhancedDebugInfo.resourceUsage.cpuInstructions.toLocaleString()}
                   </p>
                 </div>
-                {result.enhancedDebugInfo.resourceUsage.budgetedCpuInstructions > 0 &&
+                {result.enhancedDebugInfo.resourceUsage.budgetedCpuInstructions !== undefined &&
+                  result.enhancedDebugInfo.resourceUsage.budgetedCpuInstructions > 0 &&
                   result.enhancedDebugInfo.resourceUsage.budgetedCpuInstructions !== result.enhancedDebugInfo.resourceUsage.cpuInstructions && (
                     <div className="pt-2 border-t border-blue-300">
                       <p className="text-xs text-blue-500 mb-1">Budgeted</p>
@@ -85,7 +86,8 @@ export function SimulationPanel({ result }: SimulationPanelProps) {
                       : '0 bytes'}
                   </p>
                 </div>
-                {result.enhancedDebugInfo.resourceUsage.budgetedMemoryBytes > 0 &&
+                {result.enhancedDebugInfo.resourceUsage.budgetedMemoryBytes !== undefined &&
+                  result.enhancedDebugInfo.resourceUsage.budgetedMemoryBytes > 0 &&
                   result.enhancedDebugInfo.resourceUsage.budgetedMemoryBytes !== result.enhancedDebugInfo.resourceUsage.memoryBytes && (
                     <div className="pt-2 border-t border-purple-300">
                       <p className="text-xs text-purple-500 mb-1">Budgeted</p>

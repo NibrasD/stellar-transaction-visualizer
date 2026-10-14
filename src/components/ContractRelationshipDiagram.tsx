@@ -1,6 +1,7 @@
 import React from 'react';
 import { Network, GitBranch, Database, Code, Zap } from 'lucide-react';
 import * as StellarSdk from '@stellar/stellar-sdk';
+import { Buffer } from 'buffer';
 import type { SorobanOperation } from '../types/stellar';
 
 interface ContractRelationshipDiagramProps {
@@ -108,10 +109,10 @@ export function ContractRelationshipDiagram({ sorobanOperations }: ContractRelat
 
         if (bytes.length === 32) {
           try {
-            return StellarSdk.StrKey.encodeContract(bytes);
+            return StellarSdk.StrKey.encodeContract(Buffer.from(bytes));
           } catch {
             try {
-              return StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+              return StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(bytes));
             } catch {}
           }
         }

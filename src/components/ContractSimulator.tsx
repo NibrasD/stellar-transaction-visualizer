@@ -534,11 +534,11 @@ export function ContractSimulator({ networkConfig }: ContractSimulatorProps) {
 
         if (Array.isArray(simulation.result?.auth)) {
           authEntries = simulation.result.auth;
-        } else if (Array.isArray(simulation.auth)) {
-          authEntries = simulation.auth;
-        } else if (simulation.result?.results && Array.isArray(simulation.result.results)) {
+        } else if (Array.isArray((simulation as any).auth)) {
+          authEntries = (simulation as any).auth;
+        } else if ((simulation.result as any)?.results && Array.isArray((simulation.result as any).results)) {
           // Extract auth from all results
-          authEntries = simulation.result.results.flatMap((r: any) => r.auth || []);
+          authEntries = (simulation.result as any).results.flatMap((r: any) => r.auth || []);
         }
 
         let authRequirements = undefined;

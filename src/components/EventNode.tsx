@@ -2,6 +2,7 @@ import React from 'react';
 import { Zap, Database, Clock } from 'lucide-react';
 import type { NodeProps } from 'reactflow';
 import * as StellarSdk from '@stellar/stellar-sdk';
+import { Buffer } from 'buffer';
 import { Handle, Position } from 'reactflow';
 import { decodeScVal, formatContractValue } from '../services/stellar';
 
@@ -88,10 +89,10 @@ export function EventNode({ data }: NodeProps<EventNodeData>) {
         const bytes = serializedBufferToUint8Array(val);
         if (bytes.length === 32) {
           try {
-            return formatAccountId(StellarSdk.StrKey.encodeEd25519PublicKey(bytes));
+            return formatAccountId(StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(bytes)));
           } catch {
             try {
-              return formatAccountId(StellarSdk.StrKey.encodeContract(bytes));
+              return formatAccountId(StellarSdk.StrKey.encodeContract(Buffer.from(bytes)));
             } catch {
               const hex = Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join('');
               return hex.length > 32 ? `0x${hex.slice(0, 16)}...${hex.slice(-16)}` : `0x${hex}`;
@@ -198,11 +199,11 @@ export function EventNode({ data }: NodeProps<EventNodeData>) {
       const bytes = serializedBufferToUint8Array(val);
       if (bytes.length === 32) {
         try {
-          const addr = StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+          const addr = StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(bytes));
           return `${addr.substring(0, 4)}…${addr.substring(addr.length - 4)}`;
         } catch {
           try {
-            const addr = StellarSdk.StrKey.encodeContract(bytes);
+            const addr = StellarSdk.StrKey.encodeContract(Buffer.from(bytes));
             return `${addr.substring(0, 4)}…${addr.substring(addr.length - 4)}`;
           } catch {
             const hex = Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join('');

@@ -28,7 +28,7 @@ const nodeTypes: NodeTypes = {
 };
 
 interface TransactionFlowProps {
-  nodes: Node<OperationNode>[];
+  nodes: Node<any>[];
   edges: Edge[];
   effects?: TransactionEffect[];
   sorobanOperations?: SorobanOperation[];
@@ -98,11 +98,6 @@ function TransactionFlowInner({ nodes, edges, effects = [], sorobanOperations = 
   }, [isPlaying, executionStep, nodes.length, executionSpeed]);
 
   const adjustedNodes = React.useMemo(() => {
-    // Hide nodes in vertical and staggered views
-    if (layoutMode === 'vertical' || layoutMode === 'staggered') {
-      return [];
-    }
-
     // Build a tree structure from diagnostic logs if available
     const buildHierarchicalLayout = () => {
       // Check if we have simulation results with diagnostic logs

@@ -3,6 +3,7 @@ import { Database, Plus, Edit, Trash2 } from 'lucide-react';
 import type { NodeProps } from 'reactflow';
 import { StateChange } from '../types/stellar';
 import * as StellarSdk from '@stellar/stellar-sdk';
+import { Buffer } from 'buffer';
 import { formatContractValue } from '../services/stellar';
 
 interface StateChangeNodeData {
@@ -53,11 +54,11 @@ export function StateChangeNode({ data }: NodeProps<StateChangeNodeData>) {
       const bytes = serializedBufferToUint8Array(val);
       if (bytes.length === 32) {
         try {
-          const addr = StellarSdk.StrKey.encodeEd25519PublicKey(bytes);
+          const addr = StellarSdk.StrKey.encodeEd25519PublicKey(Buffer.from(bytes));
           return `${addr.substring(0, 4)}…${addr.substring(addr.length - 4)}`;
         } catch {
           try {
-            const addr = StellarSdk.StrKey.encodeContract(bytes);
+            const addr = StellarSdk.StrKey.encodeContract(Buffer.from(bytes));
             return `${addr.substring(0, 4)}…${addr.substring(addr.length - 4)}`;
           } catch {
             const hex = Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join('');

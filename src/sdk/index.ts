@@ -1,15 +1,37 @@
-import { NetworkConfig, TransactionDetails, SorobanOperation, ContractEvent, StateChange, CrossContractCall, TransactionEffect } from '../types/stellar';
-import { fetchTransaction, setNetwork, decodeScVal } from '../services/stellar';
+import { Horizon } from '@stellar/stellar-sdk';
+import {
+  NetworkConfig,
+  TransactionDetails,
+  SorobanOperation,
+  ContractEvent,
+  StateChange,
+  CrossContractCall,
+  TransactionEffect
+} from '../types/stellar';
+import {
+  fetchTransaction,
+  setNetwork,
+  decodeScVal,
+  simulateTransaction,
+  simulateTransactionWithDebugger,
+  createOperationNodes,
+  createOperationEdges,
+  simpleContractMetadataService,
+} from '../services/stellar';
 
 export class StellarTransactionVisualizer {
+  private config: NetworkConfig;
+  private server: Horizon.Server;
+
   constructor(config?: Partial<NetworkConfig>) {
-    if (config) {
-      setNetwork({
-        isTestnet: config.isTestnet ?? true,
-        networkUrl: config.networkUrl ?? 'https://horizon-testnet.stellar.org',
-        networkPassphrase: config.networkPassphrase ?? 'Test SDF Network ; September 2015',
-      });
-    }
+    const isTestnet = config?.isTestnet ?? true;
+    this.config = {
+      isTestnet,
+      networkUrl: config?.networkUrl ?? (isTestnet ? 'https://horizon-testnet.stellar.org' : 'https://horizon.stellar.org'),
+      networkPassphrase: config?.networkPassphrase ?? (isTestnet ? 'Test SDF Network ; September 2015' : 'Public Global Stellar Network ; September 2015'),
+      rpcUrl: config?.rpcUrl ?? (isTestnet ? 'https://soroban-testnet.stellar.org' : 'https://soroban-rpc.mainnet.stellar.gateway.fm'),
+    };
+    this.server = new Horizon.Server(this.config.networkUrl);
   }
 
   /**
@@ -18,7 +40,15 @@ export class StellarTransactionVisualizer {
    * @returns Detailed transaction information including Soroban operations and events
    */
   async getTransactionDetails(hash: string): Promise<TransactionDetails> {
-    return fetchTransaction(hash);
+    return fetchTransaction(hash, this.config, this.server);
+  }
+
+  /**
+   * Simulates a transaction and provides execution logs and resource metrics
+   * @param hash Transaction hash
+   */
+  async simulateTransaction(hash: string): Promise<any> {
+    return simulateTransactionWithDebugger(hash);
   }
 
   /**
@@ -82,16 +112,39 @@ export class StellarTransactionVisualizer {
   }
 
   /**
-   * Changes the network configuration
+   * Changes the network configuration for this instance
    * @param config Network configuration
    */
-  setNetwork(config: NetworkConfig): void {
-    setNetwork(config);
+  setNetwork(config: Partial<NetworkConfig>): void {
+    const isTestnet = config.isTestnet ?? this.config.isTestnet;
+    this.config = {
+      isTestnet,
+      networkUrl: config.networkUrl ?? (isTestnet ? 'https://horizon-testnet.stellar.org' : 'https://horizon.stellar.org'),
+      networkPassphrase: config.networkPassphrase ?? (isTestnet ? 'Test SDF Network ; September 2015' : 'Public Global Stellar Network ; September 2015'),
+      rpcUrl: config.rpcUrl ?? (isTestnet ? 'https://soroban-testnet.stellar.org' : 'https://soroban-rpc.mainnet.stellar.gateway.fm'),
+    };
+    this.server = new Horizon.Server(this.config.networkUrl);
+  }
+
+  /**
+   * Gets the current instance network configuration
+   */
+  getNetwork(): NetworkConfig {
+    return { ...this.config };
   }
 }
 
 // Export standalone functions for direct use
-export { fetchTransaction, setNetwork, decodeScVal } from '../services/stellar';
+export {
+  fetchTransaction,
+  setNetwork,
+  decodeScVal,
+  simulateTransaction,
+  simulateTransactionWithDebugger,
+  createOperationNodes,
+  createOperationEdges,
+  simpleContractMetadataService,
+} from '../services/stellar';
 
 // Export types for SDK users
 export type {

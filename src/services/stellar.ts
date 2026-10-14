@@ -22,9 +22,10 @@ const safeStringify = (value: any, space?: number): string => {
 
 let server: Horizon.Server;
 let networkConfig: NetworkConfig = {
-  isTestnet: false,
-  networkUrl: 'https://horizon.stellar.org',
-  networkPassphrase: 'Public Global Stellar Network ; September 2015',
+  isTestnet: true,
+  networkUrl: 'https://horizon-testnet.stellar.org',
+  networkPassphrase: 'Test SDF Network ; September 2015',
+  rpcUrl: 'https://soroban-testnet.stellar.org',
 };
 
 export const setNetwork = (config: NetworkConfig) => {
@@ -32,9 +33,9 @@ export const setNetwork = (config: NetworkConfig) => {
   server = new Horizon.Server(config.networkUrl);
 
   // Use reliable RPC endpoints
-  const rpcUrl = config.isTestnet
+  const rpcUrl = config.rpcUrl || (config.isTestnet
     ? 'https://soroban-testnet.stellar.org'
-    : 'https://soroban-rpc.mainnet.stellar.gateway.fm';
+    : 'https://soroban-rpc.mainnet.stellar.gateway.fm');
 
   const networkName = config.isTestnet ? 'testnet' : 'mainnet';
   simpleContractMetadataService.setNetwork(networkName, rpcUrl, config.networkPassphrase);
@@ -477,7 +478,7 @@ export function decodeScVal(scVal: any): any {
         return `${type}(big number)`;
       case 'scvBytes':
         const bytes = scVal.bytes();
-        const hexBytes = Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join('');
+        const hexBytes = Buffer.from(bytes).toString('hex');
         return hexBytes.length > 32 ? `0x${hexBytes.slice(0, 16)}...${hexBytes.slice(-16)}` : `0x${hexBytes}`;
       case 'scvString':
         return scVal.str().toString();
@@ -571,11 +572,7 @@ function extractOfferIdFromXdr(resultMetaXdr: string, operationIndex: number): s
         break;
       case 3: // v3
         const v3 = txMeta.v3();
-        if (v3.sorobanMeta) {
-          operations = v3.operations ? v3.operations() : [];
-        } else {
-          operations = v3.operations ? v3.operations() : [];
-        }
+        operations = v3.operations();
         break;
       case 4: // v4
         const v4 = txMeta.v4();
@@ -689,25 +686,31 @@ function formatAddress(address: string): string {
   return address;
 }
 
-export const fetchTransaction = async (hash: string): Promise<TransactionDetails> => {
+export const fetchTransaction = async (
+  hash: string,
+  customConfig?: NetworkConfig,
+  customServer?: Horizon.Server
+): Promise<TransactionDetails> => {
   let tx: any = null;
   let isArchiveTransaction = false;
+  const activeConfig = customConfig || networkConfig;
+  const activeServer = customServer || server || new Horizon.Server(activeConfig.networkUrl);
 
   try {
-    if (!server) {
+    if (!activeServer) {
       throw new Error('Horizon server not initialized. Please refresh the page.');
     }
 
     // Try to fetch from Horizon first
     try {
-      tx = await server.transactions().transaction(hash).call();
+      tx = await activeServer.transactions().transaction(hash).call();
     } catch (horizonError: any) {
       // If Horizon returns 404, check if it exists on the opposite network first
       if (horizonError.response?.status === 404 || horizonError.message?.includes('404') || horizonError.message?.includes('Not Found')) {
         // Check if transaction exists on the opposite network
-        const currentNetwork = networkConfig.isTestnet ? 'Testnet' : 'Mainnet';
-        const oppositeNetwork = networkConfig.isTestnet ? 'Mainnet' : 'Testnet';
-        const oppositeUrl = networkConfig.isTestnet
+        const currentNetwork = activeConfig.isTestnet ? 'Testnet' : 'Mainnet';
+        const oppositeNetwork = activeConfig.isTestnet ? 'Mainnet' : 'Testnet';
+        const oppositeUrl = activeConfig.isTestnet
           ? 'https://horizon.stellar.org'
           : 'https://horizon-testnet.stellar.org';
 
@@ -733,17 +736,19 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
       }
     }
 
-    // Fetch full transaction data from Horizon to get XDR fields (skip if archive transaction)
+    // Get XDR fields (skip if archive transaction)
     let resultMetaXdr = null;
     let sorobanMetaXdr = null;
     if (!isArchiveTransaction && tx) {
       try {
-        const horizonUrl = `${networkConfig.networkUrl}/transactions/${hash}`;
-        const response = await fetchWithTimeout(horizonUrl);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        let txData = tx;
+        if (!tx.result_meta_xdr && !tx.envelope_xdr) {
+          const horizonUrl = `${activeConfig.networkUrl}/transactions/${hash}`;
+          const response = await fetchWithTimeout(horizonUrl);
+          if (response.ok) {
+            txData = await response.json();
+          }
         }
-        const txData = await response.json();
 
         const xdrFields = Object.keys(txData).filter(k => k.includes('xdr') || k.includes('meta'));
 
@@ -988,7 +993,7 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
 
     let operations: any;
     if (!isArchiveTransaction) {
-      operations = await server.operations()
+      operations = await activeServer.operations()
         .forTransaction(hash)
         .limit(200)
         .call();
@@ -1069,7 +1074,7 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
     }
 
     // Normalize source_account fields immediately - Horizon sometimes returns arrays
-    operations.records = operations.records.map(op => ({
+    operations.records = operations.records.map((op: any) => ({
       ...op,
       source_account: extractAccountAddress(op.source_account)
     }));
@@ -1088,7 +1093,7 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
 
         if (transaction) {
           const xdrOperations = transaction.operations();
-          operations.records.forEach((op, index) => {
+          operations.records.forEach((op: any, index: number) => {
             if (index < xdrOperations.length) {
               const xdrOp = xdrOperations[index];
               const opBody = xdrOp.body();
@@ -1097,8 +1102,7 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
               // Extract original offer_id and price_r for offer operations
               if (opSwitch === StellarSdk.xdr.OperationType.manageSellOffer()) {
                 try {
-                  // Use _value directly - it's the actual XDR structure
-                  const offerOp = opBody._value;
+                  const offerOp = (opBody as any)._value || (opBody as any).value();
 
                   const offerIdObj = offerOp.offerId();
                   const offerIdStr = String(offerIdObj.low === 0 && offerIdObj.high === 0 ? 0 : offerIdObj);
@@ -1118,8 +1122,7 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
 
               if (opSwitch === StellarSdk.xdr.OperationType.manageBuyOffer()) {
                 try {
-                  // Use _value directly - it's the actual XDR structure
-                  const offerOp = opBody._value;
+                  const offerOp = (opBody as any)._value || (opBody as any).value();
 
                   const offerIdObj = offerOp.offerId();
                   const offerIdStr = String(offerIdObj.low === 0 && offerIdObj.high === 0 ? 0 : offerIdObj);
@@ -1139,8 +1142,7 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
 
               if (opSwitch === StellarSdk.xdr.OperationType.createPassiveSellOffer()) {
                 try {
-                  // Use _value directly - it's the actual XDR structure
-                  const offerOp = opBody._value;
+                  const offerOp = (opBody as any)._value || (opBody as any).value();
 
                   // Extract price_r from XDR
                   const priceObj = offerOp.price();
@@ -1161,7 +1163,7 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
     }
 
     // Log each operation in detail
-    operations.records.forEach((op, index) => {
+    operations.records.forEach((op: any, _index: number) => {
 
       if (op.type === 'invoke_host_function') {
 
@@ -1679,9 +1681,9 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
         // Fallback: Query active offers for the account
         // This handles cases (like Testnet) where XDR/effects might not link clearly
         try {
-          if (server) {
+          if (activeServer) {
             const accountToQuery = op.source_account || sourceAccount;
-            const offers = await server.offers()
+            const offers = await activeServer.offers()
               .forAccount(accountToQuery)
               .order('desc')
               .limit(50)
@@ -1723,7 +1725,7 @@ export const fetchTransaction = async (hash: string): Promise<TransactionDetails
           if (operation.type === 'invoke_host_function' || operation.type === 'invokeHostFunction') {
             const metaDetails = extractMetaDetails(meta, opIndex);
             if (metaDetails.stateChanges && metaDetails.stateChanges.length > 0) {
-              allStateChanges.push(...metaDetails.stateChanges.map(change => ({
+              allStateChanges.push(...metaDetails.stateChanges.map((change: any) => ({
                 ...change,
                 operationIndex: opIndex
               })));
@@ -1857,7 +1859,7 @@ const scValToNative = (scVal: any): any => {
         return `${i128.hi().toString()}:${i128.lo().toString()}`;
       case 'scvBytes':
         const bytes = scVal.bytes();
-        return Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join('');
+        return Buffer.from(bytes).toString('hex');
       case 'scvString':
         return scVal.str().toString();
       case 'scvSymbol':
@@ -2065,24 +2067,16 @@ const extractContractId = async (operation: any, sorobanData: any, operationInde
 
           if (contractAddress.switch() === StellarSdk.xdr.ScAddressType.scAddressTypeContract()) {
             const contractId = contractAddress.contractId();
-            const contractIdStr = StellarSdk.StrKey.encodeContract(contractId);
+            const contractIdStr = StellarSdk.StrKey.encodeContract(Buffer.from(contractId as any));
             return contractIdStr;
-          } else {
           }
-        } else {
         }
-      } else {
       }
-    } else {
     }
   } catch (xdrError) {
   }
 
-  if (!networkConfig.isTestnet) {
-    return `Mainnet_Contract_Op${operationIndex + 1}`;
-  }
-
-  return `Unknown_Contract_Op${operationIndex + 1}`;
+  return '';
 };
 
 // Helper function to format effect descriptions for display
@@ -2527,7 +2521,7 @@ const extractSingleEntryData = (ledgerEntry: any, isRemoved: boolean = false) =>
           case 'scvBytes': {
             const bytes = scVal.bytes();
             // Show as hex for better readability
-            const hex = Array.from(bytes).map((b: number) => b.toString(16).padStart(2, '0')).join('');
+            const hex = Buffer.from(bytes).toString('hex');
             // Truncate if too long
             if (hex.length > 64) {
               return `0x${hex.substring(0, 32)}...${hex.substring(hex.length - 32)}`;
@@ -3179,7 +3173,7 @@ const decodeTransactionXdr = async (tx: any) => {
         const envelopeType = envelope.switch()?.name || String(envelope.switch());
         debugInfo.envelopeType = envelopeType;
 
-        if (envelopeType === 'envelopeTypeTxFeeBump' || envelopeType === 'envelopeTypeFeeBump') {
+        if ((envelopeType as string) === 'envelopeTypeTxFeeBump' || (envelopeType as string) === 'envelopeTypeFeeBump') {
           isFeeBump = true;
           try {
             const feeBumpTx = envelope.feeBump();
@@ -4792,12 +4786,12 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
         if (metaType === 'transactionMetaV3' || metaType === 'transactionMetaV4' || metaType === '3' || metaType === '4') {
           const v3 = (metaType === 'transactionMetaV4' || metaType === '4') ? meta.v4() : meta.v3();
 
-          if (v3.sorobanMeta && v3.sorobanMeta()) {
-            const sorobanMeta = v3.sorobanMeta();
-
+          const sorobanMeta = v3.sorobanMeta ? v3.sorobanMeta() : null;
+          if (sorobanMeta) {
+            const sm: any = sorobanMeta;
             // Extract CPU instructions and memory from return value
             try {
-              const returnValue = sorobanMeta.returnValue();
+              const returnValue = sm.returnValue ? sm.returnValue() : null;
               if (returnValue) {
                 logs.push(`Contract returned value (type: ${returnValue.switch().name})`);
               }
@@ -4807,14 +4801,15 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
 
             // Extract real resource usage from ext.v1
             try {
-              const ext = sorobanMeta.ext();
-              const extSwitch = ext.switch();
-              const extType = (extSwitch as any).name || String(extSwitch);
-              logs.push(`Soroban meta ext type: ${extType}`);
+              const ext = sm.ext ? sm.ext() : null;
+              if (ext) {
+                const extSwitch = ext.switch();
+                const extType = (extSwitch as any).name || String(extSwitch);
+                logs.push(`Soroban meta ext type: ${extType}`);
 
-              if (extType === 'sorobanTransactionMetaExtV1' || (ext as any).v1) {
-                const v1Ext = (ext as any).v1();
-                logs.push('✅ Found v1 extension');
+                if (extType === 'sorobanTransactionMetaExtV1' || (ext as any).v1) {
+                  const v1Ext = (ext as any).v1();
+                  logs.push('✅ Found v1 extension');
 
                 // Extract CPU instructions
                 try {
@@ -4862,9 +4857,10 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
               } else {
                 logs.push('⚠️ No v1 extension found in soroban meta');
               }
-            } catch (extError) {
-              logs.push('⚠️ Could not extract extension data');
             }
+          } catch (extError) {
+            logs.push('⚠️ Could not extract extension data');
+          }
 
             // Extract real diagnostic events as logs
             try {
@@ -5071,8 +5067,8 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
 
           if (metaType === 'transactionMetaV3' || metaType === 'transactionMetaV4' || metaType === '3' || metaType === '4') {
             const v3 = (metaType === 'transactionMetaV4' || metaType === '4') ? meta.v4() : meta.v3();
-            if (v3.sorobanMeta && v3.sorobanMeta()) {
-              const sorobanMeta = v3.sorobanMeta();
+            const sorobanMeta = v3.sorobanMeta ? v3.sorobanMeta() : null;
+            if (sorobanMeta) {
 
               // Check for return value that might contain error info
               try {
@@ -5453,4 +5449,5 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
   }
 };
 
+export const simulateTransaction = simulateTransactionWithDebugger;
 export { simpleContractMetadataService };
