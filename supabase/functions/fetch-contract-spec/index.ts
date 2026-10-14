@@ -2,22 +2,26 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import * as StellarSdk from "npm:@stellar/stellar-sdk@14.2.0";
 import { createClient } from "npm:@supabase/supabase-js@2.42.0";
 
-const ALLOWED_ORIGINS = [
+const ALLOWED_ORIGINS = new Set([
   "http://localhost:5173",
   "http://localhost:3000",
   "https://stellar-transaction-visualizer.vercel.app",
-];
+]);
 
 const getCorsHeaders = (origin: string | null) => {
-  const allowedOrigin = origin && (ALLOWED_ORIGINS.includes(origin) || origin.endsWith(".vercel.app") || origin.endsWith(".netlify.app"))
-    ? origin
-    : "*";
+  const isAllowed = origin && (
+    ALLOWED_ORIGINS.has(origin) ||
+    /^https:\/\/stellar-transaction-visualizer(-[a-z0-9-]+)?\.vercel\.app$/.test(origin)
+  );
+
+  const allowedOrigin = isAllowed ? origin : "https://stellar-transaction-visualizer.vercel.app";
 
   return {
     "Access-Control-Allow-Origin": allowedOrigin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
     "Access-Control-Max-Age": "86400",
+    "Vary": "Origin",
   };
 };
 

@@ -8,10 +8,10 @@ import type {
   ContractEvent,
   SimulationResult,
   StateChange
-} from '../types/stellar';
+} from '../types/stellar.js';
 import { Node, Edge } from 'reactflow';
-import { simpleContractMetadataService } from './simpleContractMetadata';
-import { processEventsToEffects } from './eventProcessor';
+import { simpleContractMetadataService } from './simpleContractMetadata.js';
+import { processEventsToEffects } from './eventProcessor.js';
 
 // Helper to safely stringify values that might contain BigInt
 const safeStringify = (value: any, space?: number): string => {
@@ -786,7 +786,7 @@ export const fetchTransaction = async (
                 const innerHash = txData.inner_transaction.hash;
 
                 // Fetch the inner transaction to get soroban_meta_xdr
-                const innerUrl = `${networkConfig.networkUrl}/transactions/${innerHash}`;
+                const innerUrl = `${activeConfig.networkUrl}/transactions/${innerHash}`;
                 try {
                   const innerResponse = await fetchWithTimeout(innerUrl);
                   if (!innerResponse.ok) {
@@ -914,15 +914,15 @@ export const fetchTransaction = async (
     let archiveRpcData: any = null;
     if (isArchiveTransaction) {
       try {
-        archiveRpcData = await querySorobanRpc(hash);
+        archiveRpcData = await querySorobanRpc(hash, activeConfig);
       } catch (rpcError: any) {
         // If RPC also fails, transaction doesn't exist
-        const currentNetwork = networkConfig.isTestnet ? 'Testnet' : 'Mainnet';
+        const currentNetwork = activeConfig.isTestnet ? 'Testnet' : 'Mainnet';
         throw new Error(`Transaction not found on ${currentNetwork}. Please verify the transaction hash and network selection.`);
       }
 
       if (!archiveRpcData) {
-        const currentNetwork = networkConfig.isTestnet ? 'Testnet' : 'Mainnet';
+        const currentNetwork = activeConfig.isTestnet ? 'Testnet' : 'Mainnet';
         throw new Error(`Transaction not found on ${currentNetwork}. Please verify the transaction hash and network selection.`);
       }
 
@@ -931,7 +931,7 @@ export const fetchTransaction = async (
 
         // If we have neither envelope/meta nor events, we can't show the transaction
         if (!archiveRpcData.envelopeXdr && !archiveRpcData.resultMetaXdr && !archiveRpcData.events) {
-          const currentNetwork = networkConfig.isTestnet ? 'Testnet' : 'Mainnet';
+          const currentNetwork = activeConfig.isTestnet ? 'Testnet' : 'Mainnet';
           throw new Error(`Transaction not found on ${currentNetwork}. Please verify the transaction hash and network selection.`);
         }
       } else if (archiveRpcData.status === 'FAILED') {
@@ -1205,7 +1205,7 @@ export const fetchTransaction = async (
       if (isArchiveTransaction && archiveRpcData) {
         sorobanData = archiveRpcData;
       } else {
-        sorobanData = await querySorobanRpc(hash);
+        sorobanData = await querySorobanRpc(hash, activeConfig);
       }
 
       // CRITICAL: Add resultMetaXdr from RPC to tx object for state changes extraction
@@ -1214,7 +1214,7 @@ export const fetchTransaction = async (
       } else if (sorobanData && sorobanData.status === 'NOT_FOUND') {
         // Transaction not found in primary RPC, try alternative endpoints
 
-        const alternativeRpcUrls = networkConfig.isTestnet
+        const alternativeRpcUrls = activeConfig.isTestnet
           ? ['https://soroban-testnet.stellar.org', 'https://rpc-futurenet.stellar.org']
           : ['https://soroban-rpc.mainnet.stellar.gateway.fm'];
 
@@ -1789,7 +1789,7 @@ export const fetchTransaction = async (
 
       // Parse contract invocations from events
       try {
-        const { parseContractInvocations } = await import('./contractInvocationParser');
+        const { parseContractInvocations } = await import('./contractInvocationParser.js');
         result.contractInvocations = parseContractInvocations(events, tx.source_account);
       } catch (invocationError) {
       }
@@ -1800,9 +1800,9 @@ export const fetchTransaction = async (
     // Check if it's an HTTP error from our fetchWithTimeout
     if (error.message?.includes('HTTP 404')) {
       // Check if transaction exists on the opposite network
-      const currentNetwork = networkConfig.isTestnet ? 'Testnet' : 'Mainnet';
-      const oppositeNetwork = networkConfig.isTestnet ? 'Mainnet' : 'Testnet';
-      const oppositeUrl = networkConfig.isTestnet
+      const currentNetwork = activeConfig.isTestnet ? 'Testnet' : 'Mainnet';
+      const oppositeNetwork = activeConfig.isTestnet ? 'Mainnet' : 'Testnet';
+      const oppositeUrl = activeConfig.isTestnet
         ? 'https://horizon.stellar.org'
         : 'https://horizon-testnet.stellar.org';
 
@@ -1900,10 +1900,11 @@ const scValToNative = (scVal: any): any => {
   }
 };
 
-const querySorobanRpc = async (hash: string) => {
-  const rpcUrl = networkConfig.isTestnet
+const querySorobanRpc = async (hash: string, config?: NetworkConfig) => {
+  const activeConfig = config || networkConfig;
+  const rpcUrl = activeConfig.rpcUrl || (activeConfig.isTestnet
     ? 'https://soroban-testnet.stellar.org'
-    : 'https://soroban-rpc.mainnet.stellar.gateway.fm';
+    : 'https://soroban-rpc.mainnet.stellar.gateway.fm');
 
   const response = await fetchWithTimeout(rpcUrl, {
     method: 'POST',
@@ -4067,11 +4068,18 @@ export const createOperationEdges = (transaction: TransactionDetails): Edge[] =>
   return edges;
 };
 
-export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: any) => {
+export const simulateTransactionWithDebugger = async (
+  hash: string,
+  horizonTx?: any,
+  customConfig?: NetworkConfig,
+  customServer?: Horizon.Server
+) => {
+  const activeConfig = customConfig || networkConfig;
+  const activeServer = customServer || server || new Horizon.Server(activeConfig.networkUrl);
 
   try {
-    const tx = horizonTx || await server.transactions().transaction(hash).call();
-    const operations = await server.operations().forTransaction(hash).limit(200).call();
+    const tx = horizonTx || await activeServer.transactions().transaction(hash).call();
+    const operations = await activeServer.operations().forTransaction(hash).limit(200).call();
 
     // Normalize source_account fields immediately - Horizon sometimes returns arrays
     operations.records = operations.records.map(op => ({
@@ -4097,7 +4105,7 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
     let simulationData = null;
     if (hasSorobanOps) {
       try {
-        sorobanData = await querySorobanRpc(hash);
+        sorobanData = await querySorobanRpc(hash, activeConfig);
 
         // Extract actual consumed resources directly from RPC response
         // Stellar RPC returns CPU and memory in the transaction result
@@ -4121,12 +4129,12 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
         // Try to simulate the transaction to get resource usage
         if (tx.envelope_xdr && tx.successful) {
           try {
-            const transaction = StellarSdk.TransactionBuilder.fromXDR(tx.envelope_xdr, networkConfig.networkPassphrase) as StellarSdk.Transaction;
+            const transaction = StellarSdk.TransactionBuilder.fromXDR(tx.envelope_xdr, activeConfig.networkPassphrase) as StellarSdk.Transaction;
 
             // Use official Stellar RPC to simulate (free public endpoint)
-            const rpcUrl = networkConfig.isTestnet
+            const rpcUrl = activeConfig.rpcUrl || (activeConfig.isTestnet
               ? 'https://soroban-testnet.stellar.org'
-              : 'https://soroban-rpc.mainnet.stellar.gateway.fm';
+              : 'https://soroban-rpc.mainnet.stellar.gateway.fm');
 
             const rpcServer = new StellarSdk.rpc.Server(rpcUrl, { allowHttp: false });
             const simResult = await rpcServer.simulateTransaction(transaction);
@@ -4206,16 +4214,6 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
           }
         }
 
-        // If no budgeted memory but we have I/O bytes, calculate budgeted memory
-        if (realResourceUsage.budgetedMemoryBytes === 0 && (realResourceUsage.readBytes > 0 || realResourceUsage.writeBytes > 0)) {
-          realResourceUsage.budgetedMemoryBytes = realResourceUsage.readBytes + realResourceUsage.writeBytes;
-        }
-
-        // If memory not found directly, use read+write bytes
-        // In Soroban, memory usage for ledger operations = read + write bytes
-        if (realResourceUsage.memoryBytes === 0 && (realResourceUsage.readBytes > 0 || realResourceUsage.writeBytes > 0)) {
-          realResourceUsage.memoryBytes = realResourceUsage.readBytes + realResourceUsage.writeBytes;
-        }
         // Try to extract ledger entry counts
         if ((resources as any).readLedgerEntries) {
           realResourceUsage.readLedgerEntries = Number((resources as any).readLedgerEntries());
@@ -4603,10 +4601,6 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
                             realResourceUsage.writeLedgerEntries = wle;
                           }
 
-                          // Calculate memory from I/O if not available
-                          if (realResourceUsage.memoryBytes === 0 && (realResourceUsage.readBytes > 0 || realResourceUsage.writeBytes > 0)) {
-                            realResourceUsage.memoryBytes = realResourceUsage.readBytes + realResourceUsage.writeBytes;
-                          }
                           resourceMetrics = actualMetrics;
                         }
                       }
@@ -4687,7 +4681,7 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
 
     const logs: string[] = [
       `📊 Transaction Analysis: ${hash.substring(0, 12)}...`,
-      `🌐 Network: ${networkConfig.isTestnet ? 'Testnet' : 'Mainnet'}`,
+      `🌐 Network: ${activeConfig.isTestnet ? 'Testnet' : 'Mainnet'}`,
       `${tx.successful ? '✅' : '❌'} Status: ${tx.successful ? 'Success' : 'Failed'}`,
       `📦 Operations: ${tx.operation_count}`,
       `💰 Fee charged: ${feePaid.toLocaleString()} stroops (${(feePaid / 10000000).toFixed(7)} XLM)`,
@@ -5132,11 +5126,6 @@ export const simulateTransactionWithDebugger = async (hash: string, horizonTx?: 
 
       logs.push('=== END ERROR ANALYSIS ===');
       logs.push('');
-    }
-
-    // Final consolidation: if memory is still 0 but we have I/O bytes, calculate it
-    if (realResourceUsage.memoryBytes === 0 && (realResourceUsage.readBytes > 0 || realResourceUsage.writeBytes > 0)) {
-      realResourceUsage.memoryBytes = realResourceUsage.readBytes + realResourceUsage.writeBytes;
     }
 
     // FINAL AGGRESSIVE FOOTPRINT EXTRACTION - Last resort to get entry counts

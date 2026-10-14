@@ -7,7 +7,7 @@ import {
   StateChange,
   CrossContractCall,
   TransactionEffect
-} from '../types/stellar';
+} from '../types/stellar.js';
 import {
   fetchTransaction,
   setNetwork,
@@ -17,7 +17,7 @@ import {
   createOperationNodes,
   createOperationEdges,
   simpleContractMetadataService,
-} from '../services/stellar';
+} from '../services/stellar.js';
 
 export class StellarTransactionVisualizer {
   private config: NetworkConfig;
@@ -48,7 +48,7 @@ export class StellarTransactionVisualizer {
    * @param hash Transaction hash
    */
   async simulateTransaction(hash: string): Promise<any> {
-    return simulateTransactionWithDebugger(hash);
+    return simulateTransactionWithDebugger(hash, undefined, this.config, this.server);
   }
 
   /**
@@ -144,7 +144,7 @@ export {
   createOperationNodes,
   createOperationEdges,
   simpleContractMetadataService,
-} from '../services/stellar';
+} from '../services/stellar.js';
 
 // Export types for SDK users
 export type {
@@ -158,7 +158,7 @@ export type {
   ResourceUsage,
   TtlExtension,
   TransactionDebugInfo,
-} from '../types/stellar';
+} from '../types/stellar.js';
 
 // Export default instance for quick usage
 export default StellarTransactionVisualizer;

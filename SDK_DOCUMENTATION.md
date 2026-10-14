@@ -365,7 +365,7 @@ class TransactionMonitor {
     setInterval(async () => {
       try {
         // Fetch recent account transactions
-        const server = new StellarSdk.Server(networkUrl);
+        const server = new StellarSdk.Horizon.Server(networkUrl);
         const txs = await server
           .transactions()
           .forAccount(accountId)

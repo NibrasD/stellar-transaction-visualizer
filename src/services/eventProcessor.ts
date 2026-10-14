@@ -1,5 +1,5 @@
 import * as StellarSdk from '@stellar/stellar-sdk';
-import { simpleContractMetadataService, ContractMetadata } from './simpleContractMetadata';
+import { simpleContractMetadataService, ContractMetadata } from './simpleContractMetadata.js';
 
 export interface ProcessedEffect {
   type: string;

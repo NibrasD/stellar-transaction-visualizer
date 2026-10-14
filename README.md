@@ -145,13 +145,19 @@ All configuration options for `StellarTransactionVisualizer`:
 
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
-| `isTestnet` | `boolean` | No | `false` | Use testnet network |
+| `isTestnet` | `boolean` | No | `true` | Use testnet network |
 | `networkUrl` | `string` | No | Auto-detected | Custom Horizon URL |
 | `networkPassphrase` | `string` | No | Auto-detected | Network passphrase |
 
 ### Network Configuration Examples
 
-**Testnet Configuration:**
+**Testnet Configuration (Default):**
+```typescript
+const visualizer = new StellarTransactionVisualizer();
+// Automatically uses Testnet with safe default settings
+```
+
+**Explicit Testnet Configuration:**
 ```typescript
 const visualizer = new StellarTransactionVisualizer({
   isTestnet: true,
@@ -167,12 +173,6 @@ const visualizer = new StellarTransactionVisualizer({
   networkUrl: 'https://horizon.stellar.org',
   networkPassphrase: 'Public Global Stellar Network ; September 2015'
 });
-```
-
-**Default Configuration (Mainnet):**
-```typescript
-const visualizer = new StellarTransactionVisualizer();
-// Automatically uses Mainnet with default settings
 ```
 
 ### Changing Network at Runtime
@@ -294,7 +294,7 @@ import * as StellarSdk from '@stellar/stellar-sdk';
 setNetwork({ isTestnet: true });
 
 async function monitorAccount(accountId: string) {
-  const server = new StellarSdk.Server('https://horizon-testnet.stellar.org');
+  const server = new StellarSdk.Horizon.Server('https://horizon-testnet.stellar.org');
 
   let stream: any;
 

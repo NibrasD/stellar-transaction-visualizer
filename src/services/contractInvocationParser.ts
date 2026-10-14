@@ -1,4 +1,4 @@
-import { ContractInvocation, ContractEvent } from '../types/stellar';
+import { ContractInvocation, ContractEvent } from '../types/stellar.js';
 import * as StellarSdk from '@stellar/stellar-sdk';
 import { Buffer } from 'buffer';
 

@@ -420,7 +420,7 @@ function processOperation(op: SorobanOperation): void {
 import * as StellarSdk from '@stellar/stellar-sdk';
 
 async function getRecentTransactions(accountId: string) {
-  const server = new StellarSdk.Server('https://horizon-testnet.stellar.org');
+  const server = new StellarSdk.Horizon.Server('https://horizon-testnet.stellar.org');
 
   const response = await server
     .transactions()
@@ -466,7 +466,7 @@ import * as StellarSdk from '@stellar/stellar-sdk';
 import { StellarTransactionVisualizer } from '@nibrasd/transaction-visualizer';
 
 async function monitorAccount(accountId: string) {
-  const server = new StellarSdk.Server('https://horizon-testnet.stellar.org');
+  const server = new StellarSdk.Horizon.Server('https://horizon-testnet.stellar.org');
   const visualizer = new StellarTransactionVisualizer({ isTestnet: true });
 
   const stream = server

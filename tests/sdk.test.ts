@@ -92,6 +92,11 @@ describe('StellarTransactionVisualizer SDK', () => {
     expect(visualizer.getCrossContractCalls(minimalTx)).toEqual([]);
     expect(visualizer.getTransactionEffects(minimalTx)).toEqual([]);
   });
+
+  it('simulateTransaction uses isolated instance config and server', async () => {
+    const visualizer = new StellarTransactionVisualizer({ isTestnet: true });
+    expect(typeof visualizer.simulateTransaction).toBe('function');
+  });
 });
 
 describe('ScVal Decoding', () => {

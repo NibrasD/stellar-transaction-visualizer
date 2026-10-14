@@ -37,7 +37,7 @@ You can get test transaction hashes from:
 import * as StellarSdk from '@stellar/stellar-sdk';
 
 // Connect to testnet
-const server = new StellarSdk.Server('https://horizon-testnet.stellar.org');
+const server = new StellarSdk.Horizon.Server('https://horizon-testnet.stellar.org');
 
 // Get recent transactions for an account
 const transactions = await server
@@ -66,7 +66,7 @@ import * as StellarSdk from '@stellar/stellar-sdk';
 
 export class StellarAnalyzerService {
   private visualizer: StellarTransactionVisualizer;
-  private server: StellarSdk.Server;
+  private server: StellarSdk.Horizon.Server;
 
   constructor(isTestnet: boolean = false) {
     this.visualizer = new StellarTransactionVisualizer({
@@ -79,7 +79,7 @@ export class StellarAnalyzerService {
         : 'Public Global Stellar Network ; September 2015'
     });
 
-    this.server = new StellarSdk.Server(
+    this.server = new StellarSdk.Horizon.Server(
       isTestnet
         ? 'https://horizon-testnet.stellar.org'
         : 'https://horizon.stellar.org'
@@ -883,7 +883,7 @@ interface MonitorConfig {
 
 class TransactionMonitor {
   private visualizer: StellarTransactionVisualizer;
-  private server: StellarSdk.Server;
+  private server: StellarSdk.Horizon.Server;
   private wss: WebSocket.Server;
   private stellarStream: any;
 
@@ -892,7 +892,7 @@ class TransactionMonitor {
       isTestnet: config.isTestnet
     });
 
-    this.server = new StellarSdk.Server(
+    this.server = new StellarSdk.Horizon.Server(
       config.isTestnet
         ? 'https://horizon-testnet.stellar.org'
         : 'https://horizon.stellar.org'
